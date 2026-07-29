@@ -860,6 +860,21 @@ const CenterCanvas = React.memo(function CenterCanvas({
     shortcutsEnabled: !isPreviewMode,
   });
 
+  // Natural (unscaled) width of the editor canvas stage — its true layout
+  // viewport. On desktop there is no width max: the canvas always fills the
+  // available container width at ANY zoom level (mirrors finalIframeHeight,
+  // which does the same for height). Zooming out therefore widens the layout
+  // viewport — the closest simulation of a real large screen — while never
+  // dropping below the desktop breakpoint width. Other breakpoints and
+  // component editing keep the exact breakpoint/content width.
+  const canvasStageWidth = useMemo(() => {
+    if (!editingComponentId && viewportMode === 'desktop' && zoom > 0) {
+      const availableWidth = (containerWidth - CANVAS_PADDING) / (zoom / 100);
+      return Math.max(availableWidth, effectiveCanvasWidth);
+    }
+    return effectiveCanvasWidth;
+  }, [editingComponentId, viewportMode, zoom, containerWidth, effectiveCanvasWidth]);
+
   // Pan the canvas by dragging while holding Space or with the middle mouse button
   const { isPanGestureActive } = useCanvasPan({
     scrollContainerRef,
@@ -2657,7 +2672,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
               <div
                 style={{
                   // Width: exact scaled size, min 100% to fill viewport horizontally
-                  width: `${effectiveCanvasWidth * (zoom / 100) + CANVAS_PADDING}px`,
+                  width: `${canvasStageWidth * (zoom / 100) + CANVAS_PADDING}px`,
                   minWidth: '100%',
                   // Height: scaled iframe size + canvas padding. finalIframeHeight is
                   // already stretched to fill the viewport at any zoom level, so the
@@ -2675,7 +2690,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
                 <div
                   className={editingComponentId ? 'relative' : 'bg-white shadow-3xl relative'}
                   style={{
-                    width: `${effectiveCanvasWidth * (zoom / 100)}px`,
+                    width: `${canvasStageWidth * (zoom / 100)}px`,
                     height: `${finalIframeHeight * (zoom / 100)}px`,
                     flexShrink: 0, // Prevent shrinking - maintain fixed size
                     // Clip overflow when canvas is smaller than iframe (component editing)
@@ -2694,7 +2709,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
                       position: 'absolute',
                       top: 0,
                       left: 0,
-                      width: `${effectiveCanvasWidth}px`,
+                      width: `${canvasStageWidth}px`,
                       height: `${finalIframeHeight}px`,
                       transform: `scale(${zoom / 100})`,
                       transformOrigin: 'top left',
