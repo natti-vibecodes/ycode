@@ -72,7 +72,7 @@
 /*  23    agent starts working    95.5  fade out for the loop                  */
 /*  25.5  shimmer on hero + layer                                              */
 /*  29 / 41 / 54  tool steps                                                   */
-/*  66.5  shimmer off, the change lands on the canvas                          */
+/*  66.5–71.5  the hero swaps to the rebuilt layout, then the shimmer clears    */
 /* ------------------------------------------------------------------------- */
 :root {
   --demo-duration: 10s;
@@ -134,8 +134,8 @@
 
 @keyframes gateShimmer {
   0%, 25.5%   { opacity: 0; }
-  27%, 66.5%  { opacity: 1; }
-  68%, 100%   { opacity: 0; }
+  27%, 71.5%  { opacity: 1; }
+  73%, 100%   { opacity: 0; }
 }
 
 /* --- Composer: placeholder, typewriter, caret ---------------------------- */
@@ -163,11 +163,11 @@
   white-space: nowrap;
   vertical-align: bottom;
   width: 0;
-  animation: typeWidth var(--demo-duration) steps(28, end) infinite;
+  animation: typeWidth var(--demo-duration) steps(24, end) infinite;
 }
 @keyframes typeWidth {
   0%, 3.5%    { width: 0; }
-  19%, 100%   { width: 28ch; }
+  19%, 100%   { width: 24ch; }
 }
 
 .caret-gate { animation: typedGate var(--demo-duration) linear infinite; }
@@ -303,39 +303,76 @@
   100%       { color: var(--demo-muted-fg); }
 }
 
-/* --- Canvas: the button the agent adds. The slot grows so the rest of the
-       page reflows, exactly as it would when a layer is really inserted. --- */
-.cta-slot {
-  overflow: hidden;
-  max-height: 0;
-  animation: ctaSlot var(--demo-duration) ease-out infinite;
+/* --- Canvas: the hero swaps from the generic centred layout to the rebuilt
+       two-column one. The wrapper drives the height so the sections below
+       reflow, and the two variants cross-fade inside it. Both heights are
+       measured from the real content, so a variant is never clipped. --- */
+.hero-wrap {
+  --hero-h-before: 534px;
+  --hero-h-after: 666px;
+  height: var(--hero-h-before);
+  animation: heroHeight var(--demo-duration) cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
-@keyframes ctaSlot {
-  0%, 66.5%  { max-height: 0; }
-  70%, 95.5% { max-height: 140px; }
-  100%       { max-height: 0; }
+@keyframes heroHeight {
+  0%, 66.5%    { height: var(--hero-h-before); }
+  71.5%, 95.5% { height: var(--hero-h-after); }
+  100%         { height: var(--hero-h-before); }
 }
 
-.hero-cta {
+.hero-v1 { animation: heroV1Out var(--demo-duration) ease-in-out infinite; }
+@keyframes heroV1Out {
+  0%, 66.5%    { opacity: 1; transform: translateY(0); }
+  69.5%, 95.5% { opacity: 0; transform: translateY(-14px); }
+  100%         { opacity: 1; transform: translateY(0); }
+}
+
+.hero-v2 {
   opacity: 0;
-  animation: ctaIn var(--demo-duration) cubic-bezier(0.2, 0.9, 0.3, 1.2) infinite;
+  animation: heroV2In var(--demo-duration) ease-out infinite;
 }
-@keyframes ctaIn {
-  0%, 66.5%  { opacity: 0; transform: translateY(10px) scale(0.96); }
-  70%, 95.5% { opacity: 1; transform: translateY(0) scale(1); }
-  100%       { opacity: 0; transform: translateY(10px) scale(0.96); }
+@keyframes heroV2In {
+  0%, 67.5%  { opacity: 0; }
+  71%, 95.5% { opacity: 1; }
+  100%       { opacity: 0; }
 }
 
-/* The matching layer appears in the tree at the same moment. */
-.tree-btn {
+/* The pieces of the new layout settle in one after another, so the swap reads
+   as the agent composing it rather than a single cross-fade. */
+.hero-cta { animation: heroPart var(--demo-duration) cubic-bezier(0.2, 0.9, 0.3, 1.15) infinite; }
+.hero-visual { animation: heroVisualIn var(--demo-duration) cubic-bezier(0.2, 0.9, 0.3, 1.15) infinite; }
+
+@keyframes heroPart {
+  0%, 69%      { opacity: 0; transform: translateY(12px); }
+  72.5%, 95.5% { opacity: 1; transform: translateY(0); }
+  100%         { opacity: 0; transform: translateY(12px); }
+}
+@keyframes heroVisualIn {
+  0%, 68.5%  { opacity: 0; transform: translateY(16px) scale(0.97); }
+  72%, 95.5% { opacity: 1; transform: translateY(0) scale(1); }
+  100%       { opacity: 0; transform: translateY(16px) scale(0.97); }
+}
+
+/* --- Layers panel: the tree gains the rows the restructure creates, and the
+       two existing text layers indent as they move into the new column. --- */
+.tree-new {
   overflow: hidden;
   max-height: 0;
-  animation: treeBtnIn var(--demo-duration) ease-out infinite;
+  animation: treeNewIn var(--demo-duration) ease-out infinite;
 }
-@keyframes treeBtnIn {
+@keyframes treeNewIn {
   0%, 66.5%  { opacity: 0; max-height: 0; }
-  70%, 95.5% { opacity: 1; max-height: 32px; }
+  71.5%, 95.5% { opacity: 1; max-height: 32px; }
   100%       { opacity: 0; max-height: 0; }
+}
+
+.tree-indent {
+  padding-left: 50px;
+  animation: treeIndent var(--demo-duration) ease-out infinite;
+}
+@keyframes treeIndent {
+  0%, 66.5%    { padding-left: 50px; }
+  71.5%, 95.5% { padding-left: 64px; }
+  100%         { padding-left: 50px; }
 }
 
 /* --- Header save status swaps while the agent writes changes ------------- */
@@ -363,8 +400,11 @@
     max-height: none !important;
   }
 
-  .hero-cta { opacity: 1 !important; }
-  .cta-slot, .tree-btn { max-height: none !important; opacity: 1 !important; }
+  .hero-wrap { height: var(--hero-h-after) !important; }
+  .hero-v1 { opacity: 0 !important; }
+  .hero-v2, .hero-cta, .hero-visual { opacity: 1 !important; transform: none !important; }
+  .tree-new { max-height: none !important; opacity: 1 !important; }
+  .tree-indent { padding-left: 64px !important; }
   .sel-bg { background-color: var(--demo-primary) !important; }
   .sel-child-bg { background-color: var(--demo-primary-tint) !important; }
   .sel-text { color: #fff !important; }
@@ -499,12 +539,34 @@
           </div>
         </div>
 
+        <!-- Content: the column the restructure wraps the text layers in -->
+        <div class="tree-new relative">
+          <div class="relative h-8 flex items-center">
+            <div class="absolute inset-0 pointer-events-none">
+              <div class="sel-child-bg h-full w-full"></div>
+            </div>
+            <div class="relative z-10 flex items-center text-muted-foreground" style="padding-left: 50px">
+              <span class="size-4 flex items-center justify-center rotate-90">
+                <svg data-icon viewBox="0 0 12 12" class="size-2.5 opacity-50">
+                  <path d="M7.7479998,1.79289322 L8.45510658,2.5 L4.955,5.99989322 L8.45510658,9.5 L7.7479998,10.2071068 L4.247,6.70689322 L3.54,6.00089302 L4.159,5.38089322 L4.24720042,5.29209384 L4.248,5.29289322 L7.7479998,1.79289322 Z" transform="translate(5.9976,6) scale(-1,1) translate(-5.9976,-6)" />
+                </svg>
+              </span>
+              <svg data-icon viewBox="0 0 12 12" class="size-3 mx-1.5 opacity-40">
+                <polygon fill-opacity="0.15" points="3 1 3 11 9 11 9 1" />
+                <path d="M10,2 L10,10 C10,11.1045695 9.1045695,12 8,12 L4,12 C2.8954305,12 2,11.1045695 2,10 L2,2 C2,0.8954305 2.8954305,0 4,0 L8,0 C9.1045695,0 10,0.8954305 10,2 Z M8,1 L4,1 C3.44771525,1 3,1.44771525 3,2 L3,10 C3,10.5522847 3.44771525,11 4,11 L8,11 C8.55228475,11 9,10.5522847 9,10 L9,2 C9,1.44771525 8.55228475,1 8,1 Z" />
+                <path d="M11,0 L12,0 L12,12 L11,12 Z M0,0 L1,0 L1,12 L0,12 Z" fill-opacity="0.5" />
+              </svg>
+              <span class="text-2xs opacity-60">Content</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Heading -->
         <div class="relative h-8 flex items-center">
           <div class="absolute inset-0 pointer-events-none">
             <div class="sel-child-bg h-full w-full"></div>
           </div>
-          <div class="relative z-10 flex items-center text-muted-foreground" style="padding-left: 50px">
+          <div class="tree-indent relative z-10 flex items-center text-muted-foreground">
             <span class="size-4"></span>
             <svg data-icon viewBox="0 0 12 12" class="size-3 mx-1.5 opacity-40">
               <path d="M2,0 L2,6 L10,6 L10,0 L11,0 L11,12 L10,12 L10,7 L2,7 L2,12 L1,12 L1,0 L2,0 Z" />
@@ -518,7 +580,7 @@
           <div class="absolute inset-0 pointer-events-none">
             <div class="sel-child-bg h-full w-full rounded-b-lg"></div>
           </div>
-          <div class="relative z-10 flex items-center text-muted-foreground" style="padding-left: 50px">
+          <div class="tree-indent relative z-10 flex items-center text-muted-foreground">
             <span class="size-4"></span>
             <svg data-icon viewBox="0 0 12 12" class="size-3 mx-1.5 opacity-40">
               <path d="M0,1 L0,0 L12,0 L12,1 L6.5,1 L6.5,12 L5.5,12 L5.5,1 L0,1 Z" />
@@ -527,19 +589,45 @@
           </div>
         </div>
 
-        <!-- Button: inserted by the agent partway through the loop -->
-        <div class="tree-btn relative">
+        <!-- Actions: the button row the restructure adds -->
+        <div class="tree-new relative">
+          <div class="relative h-8 flex items-center">
+            <div class="absolute inset-0 pointer-events-none">
+              <div class="sel-child-bg h-full w-full"></div>
+            </div>
+            <div class="relative z-10 flex items-center text-muted-foreground" style="padding-left: 64px">
+              <span class="size-4 flex items-center justify-center">
+                <svg data-icon viewBox="0 0 12 12" class="size-2.5 opacity-50">
+                  <path d="M7.7479998,1.79289322 L8.45510658,2.5 L4.955,5.99989322 L8.45510658,9.5 L7.7479998,10.2071068 L4.247,6.70689322 L3.54,6.00089302 L4.159,5.38089322 L4.24720042,5.29209384 L4.248,5.29289322 L7.7479998,1.79289322 Z" transform="translate(5.9976,6) scale(-1,1) translate(-5.9976,-6)" />
+                </svg>
+              </span>
+              <svg data-icon viewBox="0 0 12 12" class="size-3 mx-1.5 opacity-40">
+                <path d="M2.5,1 L9.5,1 C10.3284271,1 11,1.67157288 11,2.5 L11,9.5 C11,10.3284271 10.3284271,11 9.5,11 L2.5,11 C1.67157288,11 1,10.3284271 1,9.5 L1,2.5 C1,1.67157288 1.67157288,1 2.5,1 Z" fill-opacity="0.15" />
+                <path d="M9.5,0 L2.5,0 C1.11928813,0 0,1.11928813 0,2.5 L0,9.5 C0,10.8807119 1.11928813,12 2.5,12 L9.5,12 C10.8807119,12 12,10.8807119 12,9.5 L12,2.5 C12,1.11928813 10.8807119,0 9.5,0 Z M2.5,1 L9.5,1 C10.3284271,1 11,1.67157288 11,2.5 L11,9.5 C11,10.3284271 10.3284271,11 9.5,11 L2.5,11 C1.67157288,11 1,10.3284271 1,9.5 L1,2.5 C1,1.67157288 1.67157288,1 2.5,1 Z" />
+              </svg>
+              <span class="text-2xs opacity-60">Actions</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Visual: the panel column the restructure adds -->
+        <div class="tree-new relative">
           <div class="relative h-8 flex items-center">
             <div class="absolute inset-0 pointer-events-none">
               <div class="sel-child-bg h-full w-full rounded-b-lg"></div>
             </div>
             <div class="relative z-10 flex items-center text-muted-foreground" style="padding-left: 50px">
-              <span class="size-4"></span>
+              <span class="size-4 flex items-center justify-center">
+                <svg data-icon viewBox="0 0 12 12" class="size-2.5 opacity-50">
+                  <path d="M7.7479998,1.79289322 L8.45510658,2.5 L4.955,5.99989322 L8.45510658,9.5 L7.7479998,10.2071068 L4.247,6.70689322 L3.54,6.00089302 L4.159,5.38089322 L4.24720042,5.29209384 L4.248,5.29289322 L7.7479998,1.79289322 Z" transform="translate(5.9976,6) scale(-1,1) translate(-5.9976,-6)" />
+                </svg>
+              </span>
               <svg data-icon viewBox="0 0 12 12" class="size-3 mx-1.5 opacity-40">
-                <path d="M2.5,1 L9.5,1 C10.3284271,1 11,1.67157288 11,2.5 L11,9.5 C11,10.3284271 10.3284271,11 9.5,11 L2.5,11 C1.67157288,11 1,10.3284271 1,9.5 L1,2.5 C1,1.67157288 1.67157288,1 2.5,1 Z" fill-opacity="0.15" />
-                <path d="M9.5,0 L2.5,0 C1.11928813,0 0,1.11928813 0,2.5 L0,9.5 C0,10.8807119 1.11928813,12 2.5,12 L9.5,12 C10.8807119,12 12,10.8807119 12,9.5 L12,2.5 C12,1.11928813 10.8807119,0 9.5,0 Z M2.5,1 L9.5,1 C10.3284271,1 11,1.67157288 11,2.5 L11,9.5 C11,10.3284271 10.3284271,11 9.5,11 L2.5,11 C1.67157288,11 1,10.3284271 1,9.5 L1,2.5 C1,1.67157288 1.67157288,1 2.5,1 Z" />
+                <polygon fill-opacity="0.15" points="3 1 3 11 9 11 9 1" />
+                <path d="M10,2 L10,10 C10,11.1045695 9.1045695,12 8,12 L4,12 C2.8954305,12 2,11.1045695 2,10 L2,2 C2,0.8954305 2.8954305,0 4,0 L8,0 C9.1045695,0 10,0.8954305 10,2 Z M8,1 L4,1 C3.44771525,1 3,1.44771525 3,2 L3,10 C3,10.5522847 3.44771525,11 4,11 L8,11 C8.55228475,11 9,10.5522847 9,10 L9,2 C9,1.44771525 8.55228475,1 8,1 Z" />
+                <path d="M11,0 L12,0 L12,12 L11,12 Z M0,0 L1,0 L1,12 L0,12 Z" fill-opacity="0.5" />
               </svg>
-              <span class="text-2xs opacity-60">Button</span>
+              <span class="text-2xs opacity-60">Visual</span>
             </div>
           </div>
         </div>
@@ -649,32 +737,104 @@
                 </div>
               </header>
 
-              <!-- Hero -->
-              <section class="relative px-[72px] pt-[116px] pb-[128px]">
-                <div class="max-w-[1120px] mx-auto flex flex-col items-center text-center">
-                  <div class="h-[32px] px-[14px] rounded-full border border-neutral-200 bg-neutral-50 flex items-center gap-[8px] text-[13px] font-medium text-neutral-500">
-                    <span class="size-[6px] rounded-full bg-emerald-500"></span>
-                    Now in open beta
+              <!-- Hero. Two layouts live here: the generic centred one the agent
+                   starts from, and the rebuilt two-column one it replaces it with.
+                   The wrapper animates its height so the page below reflows. -->
+              <section class="hero-wrap relative overflow-hidden">
+
+                <!-- Before: centred, single column -->
+                <div class="hero-v1 absolute inset-x-0 top-0 px-[72px] pt-[116px] pb-[128px]">
+                  <div class="max-w-[1120px] mx-auto flex flex-col items-center text-center">
+                    <div class="h-[32px] px-[14px] rounded-full border border-neutral-200 bg-neutral-50 flex items-center gap-[8px] text-[13px] font-medium text-neutral-500">
+                      <span class="size-[6px] rounded-full bg-emerald-500"></span>
+                      Now in open beta
+                    </div>
+
+                    <h1 class="mt-[30px] max-w-[880px] text-[68px] leading-[1.04] tracking-[-0.035em] font-semibold">
+                      Websites that keep up with your team
+                    </h1>
+
+                    <p class="mt-[26px] max-w-[600px] text-[19px] leading-[1.6] text-neutral-500">
+                      Draft a page, rewrite a section, publish the change. No tickets, no
+                      deploy queue, no waiting on anyone else.
+                    </p>
                   </div>
+                </div>
 
-                  <h1 class="mt-[30px] max-w-[880px] text-[68px] leading-[1.04] tracking-[-0.035em] font-semibold">
-                    Websites that keep up with your team
-                  </h1>
+                <!-- After: asymmetric two columns, left-aligned, with a visual -->
+                <div class="hero-v2 absolute inset-x-0 top-0 px-[72px] pt-[92px] pb-[104px]">
+                  <div class="max-w-[1120px] mx-auto grid grid-cols-[1.05fr_0.95fr] gap-[64px] items-center">
 
-                  <p class="mt-[26px] max-w-[600px] text-[19px] leading-[1.6] text-neutral-500">
-                    Draft a page, rewrite a section, publish the change. No tickets, no
-                    deploy queue, no waiting on anyone else.
-                  </p>
+                    <div class="flex flex-col items-start text-left">
+                      <div class="h-[32px] px-[14px] rounded-full border border-neutral-200 bg-neutral-50 flex items-center gap-[8px] text-[13px] font-medium text-neutral-500">
+                        <span class="size-[6px] rounded-full bg-emerald-500"></span>
+                        Now in open beta
+                      </div>
 
-                  <!-- The layer the agent adds -->
-                  <div class="cta-slot">
-                    <div class="pt-[40px] flex justify-center">
-                      <span class="hero-cta h-[52px] px-[26px] rounded-[12px] bg-neutral-900 text-white text-[16px] font-medium inline-flex items-center gap-[10px]">
-                        Start building
-                        <svg viewBox="0 0 24 24" class="size-[15px]" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M5 12h13m-5-6 6 6-6 6" />
+                      <h1 class="mt-[26px] text-[58px] leading-[1.04] tracking-[-0.04em] font-semibold">
+                        Websites that<br />
+                        keep up with<br />
+                        <span class="italic font-normal tracking-[-0.02em]">your team</span>
+                      </h1>
+
+                      <p class="mt-[24px] max-w-[430px] text-[18px] leading-[1.6] text-neutral-500">
+                        Draft a page, rewrite a section, publish the change — without
+                        waiting on anyone else.
+                      </p>
+
+                      <div class="mt-[34px] flex items-center gap-[12px]">
+                        <span class="hero-cta h-[52px] px-[26px] rounded-[12px] bg-neutral-900 text-white text-[16px] font-medium inline-flex items-center gap-[10px]">
+                          Start building
+                          <svg viewBox="0 0 24 24" class="size-[15px]" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M5 12h13m-5-6 6 6-6 6" />
+                          </svg>
+                        </span>
+                        <span class="h-[52px] px-[22px] rounded-[12px] border border-neutral-200 text-[16px] font-medium text-neutral-700 inline-flex items-center">
+                          Book a demo
+                        </span>
+                      </div>
+
+                      <div class="mt-[36px] flex items-center gap-[12px]">
+                        <div class="flex">
+                          <span class="size-[28px] rounded-full bg-neutral-300 border-[2px] border-white"></span>
+                          <span class="size-[28px] rounded-full bg-neutral-400 border-[2px] border-white -ml-[10px]"></span>
+                          <span class="size-[28px] rounded-full bg-neutral-500 border-[2px] border-white -ml-[10px]"></span>
+                        </div>
+                        <span class="text-[14px] text-neutral-500">Trusted by 2,000+ teams</span>
+                      </div>
+                    </div>
+
+                    <div class="hero-visual relative">
+                      <div class="relative rounded-[24px] bg-neutral-900 overflow-hidden" style="aspect-ratio: 4 / 3.3; transform: rotate(-1.5deg)">
+                        <div class="absolute inset-0" style="background: radial-gradient(120% 90% at 18% 0%, rgba(255,255,255,0.18), transparent 62%)"></div>
+                        <div class="absolute inset-[24px] rounded-[16px] border border-white/10 bg-white/5 p-[22px] flex flex-col">
+                          <div class="h-[10px] w-[116px] rounded-full bg-white/25"></div>
+                          <div class="mt-[10px] h-[10px] w-[72px] rounded-full bg-white/15"></div>
+                          <div class="mt-auto grid grid-cols-3 gap-[10px]">
+                            <div class="h-[52px] rounded-[10px] border border-white/10 bg-white/10"></div>
+                            <div class="h-[52px] rounded-[10px] border border-white/10 bg-white/10"></div>
+                            <div class="h-[52px] rounded-[10px] border border-white/10 bg-white/10"></div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="absolute -bottom-[32px] -left-[46px] w-[188px] rounded-[16px] border border-neutral-200 bg-white p-[18px] shadow-[0_18px_40px_-14px_rgba(0,0,0,0.3)]">
+                        <div class="flex items-center justify-between">
+                          <span class="text-[13px] text-neutral-500">Published</span>
+                          <span class="size-[6px] rounded-full bg-emerald-500"></span>
+                        </div>
+                        <div class="mt-[4px] text-[26px] font-semibold tracking-[-0.03em]">1.2s</div>
+                        <div class="mt-[12px] h-[6px] rounded-full bg-neutral-100 overflow-hidden">
+                          <div class="h-full w-[72%] rounded-full bg-neutral-900"></div>
+                        </div>
+                      </div>
+
+                      <div class="absolute -top-[16px] -right-[18px] h-[34px] px-[14px] rounded-full border border-neutral-200 bg-white shadow-[0_10px_24px_-12px_rgba(0,0,0,0.3)] flex items-center gap-[8px] text-[13px] font-medium">
+                        <svg viewBox="0 0 24 24" class="size-[13px]" fill="currentColor">
+                          <path d="M13.4 2 4 14h5.9l-1.1 8L20 9.6h-6z" />
                         </svg>
-                      </span>
+                        Instant preview
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -806,7 +966,7 @@
             <div class="blk blk-user">
               <div class="pt-3 flex justify-end">
                 <div class="rounded-xl rounded-br-sm bg-secondary border px-3 py-2 break-words">
-                  Add a CTA button to the hero
+                  Redesign the hero layout
                 </div>
               </div>
             </div>
@@ -828,7 +988,7 @@
 
                   <div class="step step-narr">
                     <div class="pt-1.5 leading-relaxed break-words">
-                      I'll add a button to the hero section.
+                      I'll rebuild the hero as a two-column layout with a clear primary action.
                     </div>
                   </div>
 
@@ -856,7 +1016,7 @@
                           <path d="M9.12438807,3.16800719 C9.30824644,2.96138982 9.62497058,2.94277911 9.83181124,3.12643898 C10.0156696,3.28969221 10.050819,3.55781247 9.92723048,3.76049325 L9.87342437,3.83309844 L5.36846011,8.8319966 C5.19819843,9.0233342 4.91583033,9.05232741 4.71200106,8.91337993 L4.63961894,8.85339147 L2.1467654,6.7045947 C1.9510782,6.50911876 1.9510782,6.19218964 2.1467654,5.9967137 C2.32070957,5.82295731 2.59072047,5.80365105 2.7860128,5.93879491 L2.85541143,5.9967137 L4.97189407,7.76965278 L9.12438807,3.16800719 Z" />
                         </svg>
                       </span>
-                      <span>Adding button</span>
+                      <span>Restructuring hero</span>
                     </div>
                   </div>
 
@@ -891,7 +1051,7 @@
             <!-- Assistant summary -->
             <div class="blk blk-summary">
               <div class="pt-2.5 leading-relaxed break-words">
-                Added a call-to-action button to the hero section.
+                Rebuilt the hero into an asymmetric two-column layout with a primary action and a visual panel.
               </div>
             </div>
 
@@ -908,7 +1068,7 @@
                       <path d="M6.80201493,0.332177379 L10.8486176,4.6439827 L10.8824063,4.67785636 C10.9557812,4.76486796 11,4.87727006 11,5 L11,10.8 C11,11.4585556 10.4778929,12 9.825,12 L7.5,12 C7.22385763,12 7,11.7761424 7,11.5 L7,8.46666667 C7,8.35242224 6.91730713,8.26666667 6.825,8.26666667 L5.175,8.26666667 C5.08269287,8.26666667 5,8.35242224 5,8.46666667 L5,11.5 C5,11.7761424 4.77614237,12 4.5,12 L2.175,12 C1.52210713,12 1,11.4585556 1,10.8 L1,5 C1,4.86550844 1.05310016,4.74341908 1.13947908,4.65355334 L5.19782342,0.331775385 C5.64126542,-0.110658794 6.35917876,-0.110658794 6.80201493,0.332177379 Z M5.90454749,1.03926442 L2,5.19899998 L2,10.8 C2,10.9142444 2.08269287,11 2.175,11 L4,11 L4,8.46666667 C4,7.84927082 4.45888322,7.33480469 5.05421077,7.27290812 L5.175,7.26666667 L6.825,7.26666667 C7.47789287,7.26666667 8,7.80811109 8,8.46666667 L8,11 L9.825,11 C9.90192261,11 9.97216865,10.9404475 9.99344725,10.854483 L10,10.8 L10,5.2 L5.90454749,1.03926442 Z" />
                     </svg>
                     <span class="flex-1 truncate">Home</span>
-                    <span class="shrink-0 text-muted-foreground">3 Layers</span>
+                    <span class="shrink-0 text-muted-foreground">9 Layers</span>
                   </div>
                 </div>
               </div>
@@ -922,7 +1082,7 @@
           <div class="flex flex-col rounded-lg bg-input">
             <div class="relative min-h-[84px] px-3 pt-2.5 pb-1 leading-relaxed">
               <span class="ph absolute left-3 top-2.5 text-muted-foreground/50">Ask Ycode...</span>
-              <span class="typed-line"><span class="typed">Add a CTA button to the hero</span></span><span class="caret-gate"><span class="caret"></span></span>
+              <span class="typed-line"><span class="typed">Redesign the hero layout</span></span><span class="caret-gate"><span class="caret"></span></span>
             </div>
 
             <div class="flex items-center justify-between gap-1 px-2 pb-2">
