@@ -1,0 +1,963 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ycode builder — Agent demo</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+
+<style type="text/tailwindcss">
+  /* Design tokens copied from the builder's own dark theme (app/globals.css). */
+  @theme {
+    --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+    --color-background: oklch(0.2046 0 0);
+    --color-foreground: oklch(0.985 0 0);
+    --color-border: oklch(1 0 0 / 5%);
+    --color-input: oklch(1 0 0 / 5%);
+    --color-secondary: oklch(1 0 0 / 10%);
+    --color-secondary-foreground: oklch(0.985 0 0);
+    --color-muted: oklch(0.269 0 0);
+    --color-muted-foreground: oklch(0.708 0 0);
+    --color-accent: oklch(0.32 0 0);
+    --color-primary: oklch(0.61 0.21 256.78);
+    --color-primary-foreground: oklch(0.97 0.014 254.604);
+    --color-ring: oklch(0.556 0 0);
+
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 10px;
+    --radius-xl: 14px;
+  }
+
+  @utility text-2xs {
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  @utility shadow-3xl {
+    box-shadow: 0 30px 90px -20px rgb(0 0 0 / 0.7), 0 8px 24px -12px rgb(0 0 0 / 0.5);
+  }
+
+  @layer base {
+    * { border-color: var(--color-border); }
+    html, body { height: 100%; }
+    body {
+      background: var(--color-background);
+      color: var(--color-foreground);
+      font-family: var(--font-sans);
+      font-size: 12px;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    svg[data-icon] { display: block; fill: currentColor; }
+  }
+</style>
+
+<style>
+/* ------------------------------------------------------------------------- */
+/* Timeline                                                                   */
+/*                                                                            */
+/* Every animated element shares one 10s period, so keyframe percentages keep  */
+/* the whole scene in sync and the loop never drifts. At 10s, 1% = 100ms, so   */
+/* every percentage below reads directly as a timestamp. Beats:                */
+/*   3.5  start typing            70.5  turn finishes                          */
+/*  19    prompt typed            72    summary                                */
+/*  21    prompt sent             74.5  changes card                           */
+/*  23    agent starts working    95.5  fade out for the loop                  */
+/*  25.5  shimmer on hero + layer                                              */
+/*  29 / 41 / 54  tool steps                                                   */
+/*  66.5  shimmer off, the change lands on the canvas                          */
+/* ------------------------------------------------------------------------- */
+:root {
+  --demo-duration: 10s;
+
+  /* Literal copies of the builder's dark tokens. Tailwind only emits the theme
+     variables its own utilities reference, so this stylesheet cannot rely on
+     --color-* being present. */
+  --demo-primary: oklch(0.61 0.21 256.78);
+  --demo-primary-tint: color-mix(in oklab, oklch(0.61 0.21 256.78) 15%, transparent);
+  --demo-muted-fg: oklch(0.708 0 0);
+
+  /* The page inside the canvas is authored at a 1440px design width and scaled
+     down with `zoom`, the same way the builder's canvas applies its zoom level.
+     The steps keep the artboard inside the canvas at any embed width. */
+  --page-zoom: 0.44;
+}
+
+@media (max-width: 1119px) { :root { --page-zoom: 0.32; } }
+@media (max-width: 940px)  { :root { --page-zoom: 0.26; } }
+@media (min-width: 1360px) { :root { --page-zoom: 0.49; } }
+@media (min-width: 1600px) { :root { --page-zoom: 0.58; } }
+@media (min-width: 1800px) { :root { --page-zoom: 0.66; } }
+
+/* --- Shimmering outline the agent draws over what it is editing.
+       Same mask "gradient border" trick as .ai-activity-outline in globals.css. */
+.ai-outline {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  padding: 1px;
+  background:
+    linear-gradient(110deg, transparent 26%, rgba(221, 212, 255, 1) 50%, transparent 74%),
+    rgba(139, 92, 246, 0.55);
+  background-size: 220% 100%, 100% 100%;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+}
+
+/* Inside the canvas the ring lives in the zoomed page, so its width is
+   divided back out to stay 1.5px on screen at any zoom level. */
+.ai-outline--canvas { padding: calc(2px / var(--page-zoom)); }
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* The sweep divides evenly into the demo period (5 passes), so the highlight
+   band sits in the same place every loop and the reset is invisible. */
+.shimmer-gate {
+  animation:
+    shimmer 2s ease-in-out infinite,
+    gateShimmer var(--demo-duration) linear infinite;
+}
+
+@keyframes gateShimmer {
+  0%, 25.5%   { opacity: 0; }
+  27%, 66.5%  { opacity: 1; }
+  68%, 100%   { opacity: 0; }
+}
+
+/* --- Composer: placeholder, typewriter, caret ---------------------------- */
+.ph {
+  animation: phGate var(--demo-duration) linear infinite;
+}
+@keyframes phGate {
+  0%, 3%      { opacity: 1; }
+  3.6%, 20.5% { opacity: 0; }
+  22%, 100%   { opacity: 1; }
+}
+
+.typed-line {
+  animation: typedGate var(--demo-duration) linear infinite;
+}
+@keyframes typedGate {
+  0%, 3.3%      { opacity: 0; }
+  3.5%, 20.5%   { opacity: 1; }
+  22%, 100%     { opacity: 0; }
+}
+
+.typed {
+  display: inline-block;
+  overflow: hidden;
+  white-space: nowrap;
+  vertical-align: bottom;
+  width: 0;
+  animation: typeWidth var(--demo-duration) steps(28, end) infinite;
+}
+@keyframes typeWidth {
+  0%, 3.5%    { width: 0; }
+  19%, 100%   { width: 28ch; }
+}
+
+.caret-gate { animation: typedGate var(--demo-duration) linear infinite; }
+.caret {
+  display: inline-block;
+  width: 1px;
+  height: 1.05em;
+  vertical-align: text-bottom;
+  background: currentColor;
+  animation: caretBlink 1s steps(2, end) infinite;
+}
+@keyframes caretBlink {
+  0%, 49%   { opacity: 1; }
+  50%, 100% { opacity: 0.15; }
+}
+
+.send-btn { animation: sendPress var(--demo-duration) ease-out infinite; }
+@keyframes sendPress {
+  0%, 20%    { transform: scale(1); }
+  20.8%      { transform: scale(0.86); }
+  22%, 100%  { transform: scale(1); }
+}
+
+/* --- Chat blocks. Spacing lives inside each block so collapsed blocks
+       take up no room in the message column. ------------------------------ */
+.blk { overflow: hidden; max-height: 0; opacity: 0; }
+
+.blk-user { animation: userIn var(--demo-duration) ease-out infinite; }
+@keyframes userIn {
+  0%, 21%        { opacity: 0; max-height: 0; transform: translateY(6px); }
+  23.5%, 95.5%   { opacity: 1; max-height: 160px; transform: translateY(0); }
+  100%           { opacity: 0; max-height: 0; transform: translateY(6px); }
+}
+
+.blk-working { animation: workingIn var(--demo-duration) ease-out infinite; }
+@keyframes workingIn {
+  0%, 23%      { opacity: 0; max-height: 0; }
+  24.5%, 70.5% { opacity: 1; max-height: 60px; }
+  71.8%, 100%  { opacity: 0; max-height: 0; }
+}
+
+.blk-trail { animation: trailIn var(--demo-duration) ease-out infinite; }
+@keyframes trailIn {
+  0%, 24%      { opacity: 0; max-height: 0; }
+  25.5%, 70.5% { opacity: 1; max-height: 260px; }
+  72%, 100%    { opacity: 0; max-height: 0; }
+}
+
+.blk-done { animation: doneIn var(--demo-duration) ease-out infinite; }
+@keyframes doneIn {
+  0%, 70.5%  { opacity: 0; max-height: 0; }
+  72%, 95.5% { opacity: 1; max-height: 60px; }
+  100%       { opacity: 0; max-height: 0; }
+}
+
+.blk-summary { animation: summaryIn var(--demo-duration) ease-out infinite; }
+@keyframes summaryIn {
+  0%, 72%    { opacity: 0; max-height: 0; }
+  74%, 95.5% { opacity: 1; max-height: 140px; }
+  100%       { opacity: 0; max-height: 0; }
+}
+
+.blk-card { animation: cardIn var(--demo-duration) ease-out infinite; }
+@keyframes cardIn {
+  0%, 74.5%    { opacity: 0; max-height: 0; }
+  76.5%, 95.5% { opacity: 1; max-height: 160px; }
+  100%         { opacity: 0; max-height: 0; }
+}
+
+/* --- Thinking trail rows. Each row only animates in: the trail collapsing
+       hides them again, so there is nothing to fade out. ------------------ */
+.step { overflow: hidden; max-height: 0; opacity: 0; }
+
+.step-narr { animation: narrIn var(--demo-duration) ease-out infinite; }
+@keyframes narrIn {
+  0%, 24.5%   { opacity: 0; max-height: 0; }
+  27%, 100%   { opacity: 0.6; max-height: 48px; }
+}
+
+.step-1 { animation: step1In var(--demo-duration) ease-out infinite; }
+@keyframes step1In {
+  0%, 29%   { opacity: 0; max-height: 0; }
+  31%, 100% { opacity: 1; max-height: 24px; }
+}
+
+.step-2 { animation: step2In var(--demo-duration) ease-out infinite; }
+@keyframes step2In {
+  0%, 41%   { opacity: 0; max-height: 0; }
+  43%, 100% { opacity: 1; max-height: 24px; }
+}
+
+.step-3 { animation: step3In var(--demo-duration) ease-out infinite; }
+@keyframes step3In {
+  0%, 54%   { opacity: 0; max-height: 0; }
+  56%, 100% { opacity: 1; max-height: 24px; }
+}
+
+/* Spinner -> check swap, one instant per step. */
+.spin-1 { animation: spin1Out var(--demo-duration) linear infinite; }
+.check-1 { animation: check1In var(--demo-duration) linear infinite; }
+@keyframes spin1Out { 0%, 40.7% { opacity: 1; } 41%, 100% { opacity: 0; } }
+@keyframes check1In { 0%, 40.7% { opacity: 0; } 41%, 100% { opacity: 1; } }
+
+.spin-2 { animation: spin2Out var(--demo-duration) linear infinite; }
+.check-2 { animation: check2In var(--demo-duration) linear infinite; }
+@keyframes spin2Out { 0%, 53.7% { opacity: 1; } 54%, 100% { opacity: 0; } }
+@keyframes check2In { 0%, 53.7% { opacity: 0; } 54%, 100% { opacity: 1; } }
+
+.spin-3 { animation: spin3Out var(--demo-duration) linear infinite; }
+.check-3 { animation: check3In var(--demo-duration) linear infinite; }
+@keyframes spin3Out { 0%, 66.2% { opacity: 1; } 66.5%, 100% { opacity: 0; } }
+@keyframes check3In { 0%, 66.2% { opacity: 0; } 66.5%, 100% { opacity: 1; } }
+
+/* --- Layers panel: the Hero row gets selected while the agent works on it. */
+.sel-bg { animation: selBg var(--demo-duration) ease-out infinite; }
+@keyframes selBg {
+  0%, 25.5%  { background-color: transparent; }
+  27%, 95.5% { background-color: var(--demo-primary); }
+  100%       { background-color: transparent; }
+}
+
+.sel-child-bg { animation: selChildBg var(--demo-duration) ease-out infinite; }
+@keyframes selChildBg {
+  0%, 25.5%  { background-color: transparent; }
+  27%, 95.5% { background-color: var(--demo-primary-tint); }
+  100%       { background-color: transparent; }
+}
+
+.sel-text { animation: selText var(--demo-duration) ease-out infinite; }
+@keyframes selText {
+  0%, 25.5%  { color: var(--demo-muted-fg); }
+  27%, 95.5% { color: #fff; }
+  100%       { color: var(--demo-muted-fg); }
+}
+
+/* --- Canvas: the button the agent adds. The slot grows so the rest of the
+       page reflows, exactly as it would when a layer is really inserted. --- */
+.cta-slot {
+  overflow: hidden;
+  max-height: 0;
+  animation: ctaSlot var(--demo-duration) ease-out infinite;
+}
+@keyframes ctaSlot {
+  0%, 66.5%  { max-height: 0; }
+  70%, 95.5% { max-height: 140px; }
+  100%       { max-height: 0; }
+}
+
+.hero-cta {
+  opacity: 0;
+  animation: ctaIn var(--demo-duration) cubic-bezier(0.2, 0.9, 0.3, 1.2) infinite;
+}
+@keyframes ctaIn {
+  0%, 66.5%  { opacity: 0; transform: translateY(10px) scale(0.96); }
+  70%, 95.5% { opacity: 1; transform: translateY(0) scale(1); }
+  100%       { opacity: 0; transform: translateY(10px) scale(0.96); }
+}
+
+/* The matching layer appears in the tree at the same moment. */
+.tree-btn {
+  overflow: hidden;
+  max-height: 0;
+  animation: treeBtnIn var(--demo-duration) ease-out infinite;
+}
+@keyframes treeBtnIn {
+  0%, 66.5%  { opacity: 0; max-height: 0; }
+  70%, 95.5% { opacity: 1; max-height: 32px; }
+  100%       { opacity: 0; max-height: 0; }
+}
+
+/* --- Header save status swaps while the agent writes changes ------------- */
+.status-saved { animation: statusSaved var(--demo-duration) linear infinite; }
+.status-saving { animation: statusSaving var(--demo-duration) linear infinite; }
+@keyframes statusSaved  { 0%, 23.8% { opacity: 1; } 25%, 70% { opacity: 0; } 71.5%, 100% { opacity: 1; } }
+@keyframes statusSaving { 0%, 23.8% { opacity: 0; } 25%, 70% { opacity: 1; } 71.5%, 100% { opacity: 0; } }
+
+/* --- Narrow embeds ------------------------------------------------------- */
+@media (max-width: 1000px) {
+  .panel-left { width: 208px; }
+  .panel-right { width: 232px; }
+}
+
+/* --- Reduced motion: hold the finished state ---------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; }
+
+  .typed-line, .caret-gate, .blk-working, .blk-trail { opacity: 0 !important; }
+  .blk-working, .blk-trail { max-height: 0 !important; }
+  .ph { opacity: 1 !important; }
+
+  .blk-user, .blk-done, .blk-summary, .blk-card {
+    opacity: 1 !important;
+    max-height: none !important;
+  }
+
+  .hero-cta { opacity: 1 !important; }
+  .cta-slot, .tree-btn { max-height: none !important; opacity: 1 !important; }
+  .sel-bg { background-color: var(--demo-primary) !important; }
+  .sel-child-bg { background-color: var(--demo-primary-tint) !important; }
+  .sel-text { color: #fff !important; }
+  .status-saving { opacity: 0 !important; }
+  .status-saved { opacity: 1 !important; }
+}
+</style>
+</head>
+
+<body>
+<div class="h-full flex flex-col select-none">
+
+  <!-- ================================ Header ============================ -->
+  <header class="h-14 bg-background border-b grid grid-cols-3 items-center px-4 shrink-0">
+
+    <div class="flex items-center">
+      <div class="size-8 rounded-lg bg-secondary flex items-center justify-center text-white">
+        <svg data-icon viewBox="0 0 24 24" class="size-3.5">
+          <path d="M11.4241533,0 L11.4241533,5.85877951 L6.024,8.978 L12.6155735,12.7868008 L10.951,13.749 L23.0465401,6.75101349 L23.0465401,12.6152717 L3.39516096,23.9856666 L3.3703726,24 L3.34318129,23.9827156 L0.96,22.4713365 L0.96,16.7616508 L3.36417551,18.1393242 L7.476,15.76 L0.96,11.9090099 L0.96,6.05375516 L11.4241533,0 Z" />
+        </svg>
+      </div>
+    </div>
+
+    <div class="flex gap-1.5 items-center justify-center">
+      <div class="h-6 px-2 rounded-md text-muted-foreground flex items-center gap-1.5">
+        <span>meridian.com/</span>
+      </div>
+    </div>
+
+    <div class="flex items-center justify-end gap-2">
+      <div class="relative w-16 h-4 text-xs text-white/50">
+        <span class="status-saved absolute inset-0 flex items-center justify-end">Saved</span>
+        <span class="status-saving absolute inset-0 flex items-center justify-end opacity-0">Saving...</span>
+      </div>
+      <div class="size-8 rounded-lg bg-secondary text-muted-foreground flex items-center justify-center">
+        <svg data-icon viewBox="0 0 12 12" class="size-3">
+          <path d="M7.87415728,3.0734831 L11.1746428,9.01435707 C11.442856,9.4971408 11.2689122,10.1059441 10.7861285,10.3741573 C10.6375705,10.4566895 10.4704298,10.5 10.3004855,10.5 L3.69951446,10.5 C3.14722971,10.5 2.69951446,10.0522847 2.69951446,9.5 C2.69951446,9.33005575 2.74282496,9.16291507 2.82535718,9.01435707 L6.12584272,3.0734831 C6.39405591,2.59069936 7.0028592,2.41675557 7.48564293,2.68496875 C7.648883,2.77565768 7.78346835,2.91024303 7.87415728,3.0734831 Z" transform="translate(7,6) rotate(90) translate(-7,-6)" />
+        </svg>
+      </div>
+      <div class="h-8 px-2.5 rounded-lg bg-blue-500 text-white font-medium flex items-center">Publish</div>
+    </div>
+  </header>
+
+  <div class="flex-1 flex overflow-hidden">
+
+    <!-- ============================ Layers panel ======================== -->
+    <div class="panel-left w-64 shrink-0 bg-background border-r flex flex-col overflow-hidden p-4 pb-0">
+      <div class="bg-input text-muted-foreground rounded-lg p-[3px] pt-[2px] inline-flex h-8 w-full items-center shrink-0">
+        <span class="flex-1 h-[calc(100%-1px)] rounded-md bg-secondary text-foreground shadow-sm flex items-center justify-center font-medium">Layers</span>
+        <span class="flex-1 h-[calc(100%-1px)] rounded-md flex items-center justify-center font-medium">Pages</span>
+      </div>
+      <hr class="mt-4 border-t" />
+
+      <header class="py-5 flex items-center justify-between shrink-0">
+        <span class="font-medium">Home</span>
+        <div class="h-6 px-2 rounded-md bg-secondary text-muted-foreground flex items-center">
+          <svg data-icon viewBox="0 0 12 12" class="size-3">
+            <path d="M6.5,1 L6.5,5.5 L11,5.5 L11,6.5 L6.5,6.5 L6.5,11 L5.5,11 L5.5,6.5 L1,6.5 L1,5.5 L5.5,5.5 L5.5,1 L6.5,1 Z" />
+          </svg>
+        </div>
+      </header>
+
+      <div class="flex flex-col min-h-0 overflow-hidden">
+
+        <!-- Body -->
+        <div class="relative h-8 flex items-center text-muted-foreground">
+          <div class="flex items-center" style="padding-left: 8px">
+            <span class="size-4 flex items-center justify-center rotate-90">
+              <svg data-icon viewBox="0 0 12 12" class="size-2.5 opacity-50">
+                <path d="M7.7479998,1.79289322 L8.45510658,2.5 L4.955,5.99989322 L8.45510658,9.5 L7.7479998,10.2071068 L4.247,6.70689322 L3.54,6.00089302 L4.159,5.38089322 L4.24720042,5.29209384 L4.248,5.29289322 L7.7479998,1.79289322 Z" transform="translate(5.9976,6) scale(-1,1) translate(-5.9976,-6)" />
+              </svg>
+            </span>
+            <svg data-icon viewBox="0 0 12 12" class="size-3 mx-1.5 opacity-40">
+              <path d="M2.5,1 L9.5,1 C10.3284271,1 11,1.67157288 11,2.5 L11,9.5 C11,10.3284271 10.3284271,11 9.5,11 L2.5,11 C1.67157288,11 1,10.3284271 1,9.5 L1,2.5 C1,1.67157288 1.67157288,1 2.5,1 Z" fill-opacity="0.15" />
+              <path d="M9.5,0 L2.5,0 C1.11928813,0 0,1.11928813 0,2.5 L0,9.5 C0,10.8807119 1.11928813,12 2.5,12 L9.5,12 C10.8807119,12 12,10.8807119 12,9.5 L12,2.5 C12,1.11928813 10.8807119,0 9.5,0 Z M2.5,1 L9.5,1 C10.3284271,1 11,1.67157288 11,2.5 L11,9.5 C11,10.3284271 10.3284271,11 9.5,11 L2.5,11 C1.67157288,11 1,10.3284271 1,9.5 L1,2.5 C1,1.67157288 1.67157288,1 2.5,1 Z" />
+            </svg>
+            <span class="text-2xs opacity-60">Body</span>
+          </div>
+        </div>
+
+        <!-- Navigation -->
+        <div class="relative h-8 flex items-center text-muted-foreground">
+          <div class="flex items-center" style="padding-left: 22px">
+            <span class="size-4"></span>
+            <svg data-icon viewBox="0 0 12 12" class="size-3 mx-1.5 opacity-40">
+              <polygon fill-opacity="0.15" points="1 3 1 9 11 9 11 3" />
+              <path d="M12,4 L12,8 C12,9.1045695 11.1045695,10 10,10 L2,10 C0.8954305,10 0,9.1045695 0,8 L0,4 C0,2.8954305 0.8954305,2 2,2 L10,2 C11.1045695,2 12,2.8954305 12,4 Z M10,3 L2,3 C1.44771525,3 1,3.44771525 1,4 L1,8 C1,8.55228475 1.44771525,9 2,9 L10,9 C10.5522847,9 11,8.55228475 11,8 L11,4 C11,3.44771525 10.5522847,3 10,3 Z" />
+              <path d="M0,11 L12,11 L12,12 L0,12 Z M0,0 L12,0 L12,1 L0,1 Z" fill-opacity="0.5" />
+            </svg>
+            <span class="text-2xs opacity-60">Navigation</span>
+          </div>
+        </div>
+
+        <!-- Hero (target of the agent's work) -->
+        <div class="relative h-8 flex items-center">
+          <div class="absolute inset-0 pointer-events-none">
+            <div class="sel-bg h-full w-full rounded-t-lg"></div>
+            <div class="ai-outline shimmer-gate rounded-t-lg"></div>
+          </div>
+          <div class="sel-text relative z-10 flex items-center text-muted-foreground" style="padding-left: 22px">
+            <span class="size-4 flex items-center justify-center rotate-90">
+              <svg data-icon viewBox="0 0 12 12" class="size-2.5 opacity-70">
+                <path d="M7.7479998,1.79289322 L8.45510658,2.5 L4.955,5.99989322 L8.45510658,9.5 L7.7479998,10.2071068 L4.247,6.70689322 L3.54,6.00089302 L4.159,5.38089322 L4.24720042,5.29209384 L4.248,5.29289322 L7.7479998,1.79289322 Z" transform="translate(5.9976,6) scale(-1,1) translate(-5.9976,-6)" />
+              </svg>
+            </span>
+            <svg data-icon viewBox="0 0 12 12" class="size-3 mx-1.5 opacity-60">
+              <polygon fill-opacity="0.15" points="1 3 1 9 11 9 11 3" />
+              <path d="M12,4 L12,8 C12,9.1045695 11.1045695,10 10,10 L2,10 C0.8954305,10 0,9.1045695 0,8 L0,4 C0,2.8954305 0.8954305,2 2,2 L10,2 C11.1045695,2 12,2.8954305 12,4 Z M10,3 L2,3 C1.44771525,3 1,3.44771525 1,4 L1,8 C1,8.55228475 1.44771525,9 2,9 L10,9 C10.5522847,9 11,8.55228475 11,8 L11,4 C11,3.44771525 10.5522847,3 10,3 Z" />
+              <path d="M0,11 L12,11 L12,12 L0,12 Z M0,0 L12,0 L12,1 L0,1 Z" fill-opacity="0.5" />
+            </svg>
+            <span class="text-2xs opacity-90">Hero</span>
+          </div>
+        </div>
+
+        <!-- Container -->
+        <div class="relative h-8 flex items-center">
+          <div class="absolute inset-0 pointer-events-none">
+            <div class="sel-child-bg h-full w-full"></div>
+          </div>
+          <div class="relative z-10 flex items-center text-muted-foreground" style="padding-left: 36px">
+            <span class="size-4 flex items-center justify-center rotate-90">
+              <svg data-icon viewBox="0 0 12 12" class="size-2.5 opacity-50">
+                <path d="M7.7479998,1.79289322 L8.45510658,2.5 L4.955,5.99989322 L8.45510658,9.5 L7.7479998,10.2071068 L4.247,6.70689322 L3.54,6.00089302 L4.159,5.38089322 L4.24720042,5.29209384 L4.248,5.29289322 L7.7479998,1.79289322 Z" transform="translate(5.9976,6) scale(-1,1) translate(-5.9976,-6)" />
+              </svg>
+            </span>
+            <svg data-icon viewBox="0 0 12 12" class="size-3 mx-1.5 opacity-40">
+              <polygon fill-opacity="0.15" points="3 1 3 11 9 11 9 1" />
+              <path d="M10,2 L10,10 C10,11.1045695 9.1045695,12 8,12 L4,12 C2.8954305,12 2,11.1045695 2,10 L2,2 C2,0.8954305 2.8954305,0 4,0 L8,0 C9.1045695,0 10,0.8954305 10,2 Z M8,1 L4,1 C3.44771525,1 3,1.44771525 3,2 L3,10 C3,10.5522847 3.44771525,11 4,11 L8,11 C8.55228475,11 9,10.5522847 9,10 L9,2 C9,1.44771525 8.55228475,1 8,1 Z" />
+              <path d="M11,0 L12,0 L12,12 L11,12 Z M0,0 L1,0 L1,12 L0,12 Z" fill-opacity="0.5" />
+            </svg>
+            <span class="text-2xs opacity-60">Container</span>
+          </div>
+        </div>
+
+        <!-- Heading -->
+        <div class="relative h-8 flex items-center">
+          <div class="absolute inset-0 pointer-events-none">
+            <div class="sel-child-bg h-full w-full"></div>
+          </div>
+          <div class="relative z-10 flex items-center text-muted-foreground" style="padding-left: 50px">
+            <span class="size-4"></span>
+            <svg data-icon viewBox="0 0 12 12" class="size-3 mx-1.5 opacity-40">
+              <path d="M2,0 L2,6 L10,6 L10,0 L11,0 L11,12 L10,12 L10,7 L2,7 L2,12 L1,12 L1,0 L2,0 Z" />
+            </svg>
+            <span class="text-2xs opacity-60">Heading</span>
+          </div>
+        </div>
+
+        <!-- Paragraph -->
+        <div class="relative h-8 flex items-center">
+          <div class="absolute inset-0 pointer-events-none">
+            <div class="sel-child-bg h-full w-full rounded-b-lg"></div>
+          </div>
+          <div class="relative z-10 flex items-center text-muted-foreground" style="padding-left: 50px">
+            <span class="size-4"></span>
+            <svg data-icon viewBox="0 0 12 12" class="size-3 mx-1.5 opacity-40">
+              <path d="M0,1 L0,0 L12,0 L12,1 L6.5,1 L6.5,12 L5.5,12 L5.5,1 L0,1 Z" />
+            </svg>
+            <span class="text-2xs opacity-60">Paragraph</span>
+          </div>
+        </div>
+
+        <!-- Button: inserted by the agent partway through the loop -->
+        <div class="tree-btn relative">
+          <div class="relative h-8 flex items-center">
+            <div class="absolute inset-0 pointer-events-none">
+              <div class="sel-child-bg h-full w-full rounded-b-lg"></div>
+            </div>
+            <div class="relative z-10 flex items-center text-muted-foreground" style="padding-left: 50px">
+              <span class="size-4"></span>
+              <svg data-icon viewBox="0 0 12 12" class="size-3 mx-1.5 opacity-40">
+                <path d="M2.5,1 L9.5,1 C10.3284271,1 11,1.67157288 11,2.5 L11,9.5 C11,10.3284271 10.3284271,11 9.5,11 L2.5,11 C1.67157288,11 1,10.3284271 1,9.5 L1,2.5 C1,1.67157288 1.67157288,1 2.5,1 Z" fill-opacity="0.15" />
+                <path d="M9.5,0 L2.5,0 C1.11928813,0 0,1.11928813 0,2.5 L0,9.5 C0,10.8807119 1.11928813,12 2.5,12 L9.5,12 C10.8807119,12 12,10.8807119 12,9.5 L12,2.5 C12,1.11928813 10.8807119,0 9.5,0 Z M2.5,1 L9.5,1 C10.3284271,1 11,1.67157288 11,2.5 L11,9.5 C11,10.3284271 10.3284271,11 9.5,11 L2.5,11 C1.67157288,11 1,10.3284271 1,9.5 L1,2.5 C1,1.67157288 1.67157288,1 2.5,1 Z" />
+              </svg>
+              <span class="text-2xs opacity-60">Button</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Features -->
+        <div class="relative h-8 flex items-center text-muted-foreground">
+          <div class="flex items-center" style="padding-left: 22px">
+            <span class="size-4 flex items-center justify-center">
+              <svg data-icon viewBox="0 0 12 12" class="size-2.5 opacity-50">
+                <path d="M7.7479998,1.79289322 L8.45510658,2.5 L4.955,5.99989322 L8.45510658,9.5 L7.7479998,10.2071068 L4.247,6.70689322 L3.54,6.00089302 L4.159,5.38089322 L4.24720042,5.29209384 L4.248,5.29289322 L7.7479998,1.79289322 Z" transform="translate(5.9976,6) scale(-1,1) translate(-5.9976,-6)" />
+              </svg>
+            </span>
+            <svg data-icon viewBox="0 0 12 12" class="size-3 mx-1.5 opacity-40">
+              <polygon fill-opacity="0.15" points="1 3 1 9 11 9 11 3" />
+              <path d="M12,4 L12,8 C12,9.1045695 11.1045695,10 10,10 L2,10 C0.8954305,10 0,9.1045695 0,8 L0,4 C0,2.8954305 0.8954305,2 2,2 L10,2 C11.1045695,2 12,2.8954305 12,4 Z M10,3 L2,3 C1.44771525,3 1,3.44771525 1,4 L1,8 C1,8.55228475 1.44771525,9 2,9 L10,9 C10.5522847,9 11,8.55228475 11,8 L11,4 C11,3.44771525 10.5522847,3 10,3 Z" />
+              <path d="M0,11 L12,11 L12,12 L0,12 Z M0,0 L12,0 L12,1 L0,1 Z" fill-opacity="0.5" />
+            </svg>
+            <span class="text-2xs opacity-60">Features</span>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="relative h-8 flex items-center text-muted-foreground">
+          <div class="flex items-center" style="padding-left: 22px">
+            <span class="size-4 flex items-center justify-center">
+              <svg data-icon viewBox="0 0 12 12" class="size-2.5 opacity-50">
+                <path d="M7.7479998,1.79289322 L8.45510658,2.5 L4.955,5.99989322 L8.45510658,9.5 L7.7479998,10.2071068 L4.247,6.70689322 L3.54,6.00089302 L4.159,5.38089322 L4.24720042,5.29209384 L4.248,5.29289322 L7.7479998,1.79289322 Z" transform="translate(5.9976,6) scale(-1,1) translate(-5.9976,-6)" />
+              </svg>
+            </span>
+            <svg data-icon viewBox="0 0 12 12" class="size-3 mx-1.5 opacity-40">
+              <polygon fill-opacity="0.15" points="1 3 1 9 11 9 11 3" />
+              <path d="M12,4 L12,8 C12,9.1045695 11.1045695,10 10,10 L2,10 C0.8954305,10 0,9.1045695 0,8 L0,4 C0,2.8954305 0.8954305,2 2,2 L10,2 C11.1045695,2 12,2.8954305 12,4 Z M10,3 L2,3 C1.44771525,3 1,3.44771525 1,4 L1,8 C1,8.55228475 1.44771525,9 2,9 L10,9 C10.5522847,9 11,8.55228475 11,8 L11,4 C11,3.44771525 10.5522847,3 10,3 Z" />
+              <path d="M0,11 L12,11 L12,12 L0,12 Z M0,0 L12,0 L12,1 L0,1 Z" fill-opacity="0.5" />
+            </svg>
+            <span class="text-2xs opacity-60">Footer</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ============================== Canvas =========================== -->
+    <div class="flex-1 min-w-0 flex flex-col relative">
+
+      <div class="grid grid-cols-3 items-center p-4 border-b bg-background shrink-0">
+        <div></div>
+
+        <div class="flex justify-center gap-2">
+          <div class="bg-input text-muted-foreground rounded-lg p-[3px] pt-[2px] inline-flex h-8 w-50 items-center">
+            <span class="flex-1 h-[calc(100%-1px)] rounded-md bg-secondary text-foreground shadow-sm flex items-center justify-center font-medium">Desktop</span>
+            <span class="flex-1 h-[calc(100%-1px)] rounded-md flex items-center justify-center font-medium">Tablet</span>
+            <span class="flex-1 h-[calc(100%-1px)] rounded-md flex items-center justify-center font-medium">Phone</span>
+          </div>
+          <div class="h-8 w-18 px-2.5 rounded-lg bg-input text-muted-foreground flex items-center gap-1.5">
+            <span class="flex-1 text-center">100%</span>
+            <svg data-icon viewBox="0 0 12 12" class="size-2.5 opacity-50" fill="none">
+              <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </div>
+        </div>
+
+        <div class="flex justify-end gap-0 text-muted-foreground">
+          <div class="h-8 px-2.5 rounded-lg flex items-center">
+            <svg data-icon viewBox="0 0 12 12" class="size-3">
+              <path d="M3.414215,3.98236073 L4.68198,5.25332084 L3.974875,5.96220513 L1.5,3.48110257 L3.974875,1 L4.68198,1.70888931 L3.414215,2.97984441 L7,2.97984441 C9.20915,2.97984441 11,4.77521078 11,6.98993474 C11,9.20459353 9.20915,11 7,11 L5.00007629,11 L5.00007629,9.99748368 L7,9.99748368 C8.65685,9.99748368 10,8.65095389 10,6.98993474 C10,5.3288855 8.65685,3.98236073 7,3.98236073 L3.414215,3.98236073 Z" />
+            </svg>
+          </div>
+          <div class="h-8 px-2.5 rounded-lg flex items-center">
+            <svg data-icon viewBox="0 0 12 12" class="size-3">
+              <path d="M3.414215,3.98236073 L4.68198,5.25332084 L3.974875,5.96220513 L1.5,3.48110257 L3.974875,1 L4.68198,1.70888931 L3.414215,2.97984441 L7,2.97984441 C9.20915,2.97984441 11,4.77521078 11,6.98993474 C11,9.20459353 9.20915,11 7,11 L5.00007629,11 L5.00007629,9.99748368 L7,9.99748368 C8.65685,9.99748368 10,8.65095389 10,6.98993474 C10,5.3288855 8.65685,3.98236073 7,3.98236073 L3.414215,3.98236073 Z" transform="translate(6.25,6) scale(-1,1) translate(-6.25,-6)" />
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex-1 relative overflow-hidden bg-neutral-950/80">
+        <div class="absolute inset-0 overflow-hidden pt-5 px-6">
+          <div class="mx-auto w-fit bg-white shadow-3xl relative">
+
+            <!-- The rendered page, authored at 1440px and scaled by the canvas zoom. -->
+            <div class="w-[1440px] text-[16px] text-neutral-900" style="zoom: var(--page-zoom)">
+
+              <!-- Navigation -->
+              <header class="h-[80px] px-[72px] flex items-center justify-between border-b border-neutral-200">
+                <div class="flex items-center gap-[10px]">
+                  <div class="size-[30px] rounded-[9px] bg-neutral-900 flex items-center justify-center">
+                    <svg viewBox="0 0 24 24" class="size-[15px] text-white" fill="currentColor">
+                      <path d="M12 2.5l9 5.25-9 5.25-9-5.25z" />
+                      <path d="M12 15.1l9-5.25v4.4L12 19.5l-9-5.25v-4.4z" opacity="0.45" />
+                    </svg>
+                  </div>
+                  <span class="text-[19px] font-semibold tracking-[-0.02em]">Meridian</span>
+                </div>
+
+                <nav class="flex items-center gap-[38px] text-[15px] text-neutral-500">
+                  <span>Platform</span>
+                  <span>Templates</span>
+                  <span>Docs</span>
+                  <span>Changelog</span>
+                </nav>
+
+                <div class="flex items-center gap-[26px]">
+                  <span class="text-[15px] text-neutral-500">Sign in</span>
+                  <span class="h-[42px] px-[18px] rounded-[10px] bg-neutral-900 text-white text-[15px] font-medium flex items-center">
+                    Get started
+                  </span>
+                </div>
+              </header>
+
+              <!-- Hero -->
+              <section class="relative px-[72px] pt-[116px] pb-[128px]">
+                <div class="max-w-[1120px] mx-auto flex flex-col items-center text-center">
+                  <div class="h-[32px] px-[14px] rounded-full border border-neutral-200 bg-neutral-50 flex items-center gap-[8px] text-[13px] font-medium text-neutral-500">
+                    <span class="size-[6px] rounded-full bg-emerald-500"></span>
+                    Now in open beta
+                  </div>
+
+                  <h1 class="mt-[30px] max-w-[880px] text-[68px] leading-[1.04] tracking-[-0.035em] font-semibold">
+                    Websites that keep up with your team
+                  </h1>
+
+                  <p class="mt-[26px] max-w-[600px] text-[19px] leading-[1.6] text-neutral-500">
+                    Draft a page, rewrite a section, publish the change. No tickets, no
+                    deploy queue, no waiting on anyone else.
+                  </p>
+
+                  <!-- The layer the agent adds -->
+                  <div class="cta-slot">
+                    <div class="pt-[40px] flex justify-center">
+                      <span class="hero-cta h-[52px] px-[26px] rounded-[12px] bg-neutral-900 text-white text-[16px] font-medium inline-flex items-center gap-[10px]">
+                        Start building
+                        <svg viewBox="0 0 24 24" class="size-[15px]" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M5 12h13m-5-6 6 6-6 6" />
+                        </svg>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="ai-outline ai-outline--canvas shimmer-gate"></div>
+              </section>
+
+              <!-- Features -->
+              <section class="px-[72px] py-[112px] bg-neutral-50 border-t border-neutral-200">
+                <div class="max-w-[1120px] mx-auto">
+                  <span class="text-[13px] font-medium uppercase tracking-[0.14em] text-neutral-400">Capabilities</span>
+                  <h2 class="mt-[16px] max-w-[520px] text-[40px] leading-[1.15] tracking-[-0.025em] font-semibold">
+                    Built for the way your team actually works
+                  </h2>
+
+                  <div class="mt-[56px] grid grid-cols-3 gap-[26px]">
+                    <div class="rounded-[18px] border border-neutral-200 bg-white p-[32px]">
+                      <div class="size-[42px] rounded-[12px] bg-neutral-900 flex items-center justify-center text-white">
+                        <svg viewBox="0 0 24 24" class="size-[19px]" fill="currentColor">
+                          <path d="M4.2 3.1 11 19.4l2.3-6.1 6.1-2.3z" />
+                        </svg>
+                      </div>
+                      <h3 class="mt-[22px] text-[20px] font-semibold tracking-[-0.015em]">Edit on the page</h3>
+                      <p class="mt-[10px] text-[15px] leading-[1.65] text-neutral-500">
+                        Select anything, change it, and watch the result render as you type.
+                      </p>
+                    </div>
+
+                    <div class="rounded-[18px] border border-neutral-200 bg-white p-[32px]">
+                      <div class="size-[42px] rounded-[12px] bg-neutral-900 flex items-center justify-center text-white">
+                        <svg viewBox="0 0 24 24" class="size-[19px]" fill="none" stroke="currentColor" stroke-width="2">
+                          <ellipse cx="12" cy="6" rx="8" ry="3" />
+                          <path d="M4 6v12c0 1.66 3.58 3 8 3s8-1.34 8-3V6" />
+                          <path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3" />
+                        </svg>
+                      </div>
+                      <h3 class="mt-[22px] text-[20px] font-semibold tracking-[-0.015em]">Content that scales</h3>
+                      <p class="mt-[10px] text-[15px] leading-[1.65] text-neutral-500">
+                        Model your data once, then reuse it across every page and locale.
+                      </p>
+                    </div>
+
+                    <div class="rounded-[18px] border border-neutral-200 bg-white p-[32px]">
+                      <div class="size-[42px] rounded-[12px] bg-neutral-900 flex items-center justify-center text-white">
+                        <svg viewBox="0 0 24 24" class="size-[19px]" fill="currentColor">
+                          <path d="M13.4 2 4 14h5.9l-1.1 8L20 9.6h-6z" />
+                        </svg>
+                      </div>
+                      <h3 class="mt-[22px] text-[20px] font-semibold tracking-[-0.015em]">Publish in a click</h3>
+                      <p class="mt-[10px] text-[15px] leading-[1.65] text-neutral-500">
+                        Every edit is a draft until you decide the whole site should go live.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- Footer -->
+              <footer class="px-[72px] pt-[72px] pb-[80px] bg-neutral-900">
+                <div class="max-w-[1120px] mx-auto flex items-start justify-between">
+                  <div class="flex items-center gap-[10px]">
+                    <div class="size-[30px] rounded-[9px] bg-white/10 flex items-center justify-center">
+                      <svg viewBox="0 0 24 24" class="size-[15px] text-white" fill="currentColor">
+                        <path d="M12 2.5l9 5.25-9 5.25-9-5.25z" />
+                        <path d="M12 15.1l9-5.25v4.4L12 19.5l-9-5.25v-4.4z" opacity="0.45" />
+                      </svg>
+                    </div>
+                    <span class="text-[19px] font-semibold tracking-[-0.02em] text-white">Meridian</span>
+                  </div>
+
+                  <div class="flex gap-[80px] text-[15px] leading-[2] text-white/45">
+                    <div class="flex flex-col">
+                      <span class="text-white/80 font-medium">Product</span>
+                      <span>Overview</span>
+                      <span>Pricing</span>
+                    </div>
+                    <div class="flex flex-col">
+                      <span class="text-white/80 font-medium">Resources</span>
+                      <span>Guides</span>
+                      <span>Support</span>
+                    </div>
+                    <div class="flex flex-col">
+                      <span class="text-white/80 font-medium">Company</span>
+                      <span>About</span>
+                      <span>Careers</span>
+                    </div>
+                  </div>
+                </div>
+              </footer>
+
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================ Agent panel ======================== -->
+    <div class="panel-right w-64 shrink-0 bg-background border-l flex flex-col h-full overflow-hidden">
+
+      <div class="px-4 pt-4 shrink-0">
+        <div class="bg-input text-muted-foreground rounded-lg p-[3px] pt-[2px] inline-flex h-8 w-full items-center">
+          <span class="flex-1 h-[calc(100%-1px)] rounded-md flex items-center justify-center font-medium">Human</span>
+          <span class="flex-1 h-[calc(100%-1px)] rounded-md bg-secondary text-foreground shadow-sm flex items-center justify-center font-medium">Agent</span>
+        </div>
+        <hr class="mt-4 border-t" />
+      </div>
+
+      <div class="flex flex-col flex-1 min-h-0 overflow-hidden">
+
+        <div class="flex items-center justify-between gap-2 px-4 pt-3 pb-2 shrink-0">
+          <div class="h-8 min-w-0 flex-1 flex items-center justify-between gap-2 px-2.5 rounded-lg bg-secondary text-muted-foreground font-medium">
+            <span class="truncate">New chat</span>
+            <svg data-icon viewBox="0 0 12 12" class="size-3 shrink-0" fill="none">
+              <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </div>
+          <div class="size-8 rounded-lg bg-secondary text-muted-foreground flex items-center justify-center shrink-0">
+            <svg data-icon viewBox="0 0 12 12" class="size-3">
+              <path d="M6.5,1 L6.5,5.5 L11,5.5 L11,6.5 L6.5,6.5 L6.5,11 L5.5,11 L5.5,6.5 L1,6.5 L1,5.5 L5.5,5.5 L5.5,1 L6.5,1 Z" />
+            </svg>
+          </div>
+        </div>
+
+        <!-- Messages -->
+        <div class="relative flex-1 min-h-0">
+          <div class="absolute inset-0 overflow-hidden px-4 pb-4 flex flex-col">
+
+            <!-- User message -->
+            <div class="blk blk-user">
+              <div class="pt-3 flex justify-end">
+                <div class="rounded-xl rounded-br-sm bg-secondary border px-3 py-2 break-words">
+                  Add a CTA button to the hero
+                </div>
+              </div>
+            </div>
+
+            <!-- Working… -->
+            <div class="blk blk-working">
+              <div class="pt-3 flex items-center gap-1.5 text-muted-foreground">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" class="size-3 animate-spin">
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+                <span>Working...</span>
+              </div>
+            </div>
+
+            <!-- Thinking trail -->
+            <div class="blk blk-trail">
+              <div class="pt-1.5">
+                <div class="ml-1 border-l pl-2.5 flex flex-col">
+
+                  <div class="step step-narr">
+                    <div class="pt-1.5 leading-relaxed break-words">
+                      I'll add a button to the hero section.
+                    </div>
+                  </div>
+
+                  <div class="step step-1">
+                    <div class="h-[22px] flex items-center gap-2 text-muted-foreground">
+                      <span class="relative size-3 shrink-0">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" class="spin-1 absolute inset-0 size-3 animate-spin">
+                          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                        </svg>
+                        <svg data-icon viewBox="0 0 12 12" class="check-1 absolute inset-0 size-3 text-foreground opacity-0">
+                          <path d="M9.12438807,3.16800719 C9.30824644,2.96138982 9.62497058,2.94277911 9.83181124,3.12643898 C10.0156696,3.28969221 10.050819,3.55781247 9.92723048,3.76049325 L9.87342437,3.83309844 L5.36846011,8.8319966 C5.19819843,9.0233342 4.91583033,9.05232741 4.71200106,8.91337993 L4.63961894,8.85339147 L2.1467654,6.7045947 C1.9510782,6.50911876 1.9510782,6.19218964 2.1467654,5.9967137 C2.32070957,5.82295731 2.59072047,5.80365105 2.7860128,5.93879491 L2.85541143,5.9967137 L4.97189407,7.76965278 L9.12438807,3.16800719 Z" />
+                        </svg>
+                      </span>
+                      <span>Reading layers</span>
+                    </div>
+                  </div>
+
+                  <div class="step step-2">
+                    <div class="h-[22px] flex items-center gap-2 text-muted-foreground">
+                      <span class="relative size-3 shrink-0">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" class="spin-2 absolute inset-0 size-3 animate-spin">
+                          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                        </svg>
+                        <svg data-icon viewBox="0 0 12 12" class="check-2 absolute inset-0 size-3 text-foreground opacity-0">
+                          <path d="M9.12438807,3.16800719 C9.30824644,2.96138982 9.62497058,2.94277911 9.83181124,3.12643898 C10.0156696,3.28969221 10.050819,3.55781247 9.92723048,3.76049325 L9.87342437,3.83309844 L5.36846011,8.8319966 C5.19819843,9.0233342 4.91583033,9.05232741 4.71200106,8.91337993 L4.63961894,8.85339147 L2.1467654,6.7045947 C1.9510782,6.50911876 1.9510782,6.19218964 2.1467654,5.9967137 C2.32070957,5.82295731 2.59072047,5.80365105 2.7860128,5.93879491 L2.85541143,5.9967137 L4.97189407,7.76965278 L9.12438807,3.16800719 Z" />
+                        </svg>
+                      </span>
+                      <span>Adding button</span>
+                    </div>
+                  </div>
+
+                  <div class="step step-3">
+                    <div class="h-[22px] flex items-center gap-2 text-muted-foreground">
+                      <span class="relative size-3 shrink-0">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" class="spin-3 absolute inset-0 size-3 animate-spin">
+                          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                        </svg>
+                        <svg data-icon viewBox="0 0 12 12" class="check-3 absolute inset-0 size-3 text-foreground opacity-0">
+                          <path d="M9.12438807,3.16800719 C9.30824644,2.96138982 9.62497058,2.94277911 9.83181124,3.12643898 C10.0156696,3.28969221 10.050819,3.55781247 9.92723048,3.76049325 L9.87342437,3.83309844 L5.36846011,8.8319966 C5.19819843,9.0233342 4.91583033,9.05232741 4.71200106,8.91337993 L4.63961894,8.85339147 L2.1467654,6.7045947 C1.9510782,6.50911876 1.9510782,6.19218964 2.1467654,5.9967137 C2.32070957,5.82295731 2.59072047,5.80365105 2.7860128,5.93879491 L2.85541143,5.9967137 L4.97189407,7.76965278 L9.12438807,3.16800719 Z" />
+                        </svg>
+                      </span>
+                      <span>Updating design</span>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            </div>
+
+            <!-- Thought for 5s -->
+            <div class="blk blk-done">
+              <div class="pt-3 flex items-center gap-1.5 text-muted-foreground">
+                <svg data-icon viewBox="0 0 12 12" class="size-3">
+                  <path d="M7.7479998,1.79289322 L8.45510658,2.5 L4.955,5.99989322 L8.45510658,9.5 L7.7479998,10.2071068 L4.247,6.70689322 L3.54,6.00089302 L4.159,5.38089322 L4.24720042,5.29209384 L4.248,5.29289322 L7.7479998,1.79289322 Z" transform="translate(5.9976,6) scale(-1,1) translate(-5.9976,-6)" />
+                </svg>
+                <span>Thought for 5s</span>
+              </div>
+            </div>
+
+            <!-- Assistant summary -->
+            <div class="blk blk-summary">
+              <div class="pt-2.5 leading-relaxed break-words">
+                Added a call-to-action button to the hero section.
+              </div>
+            </div>
+
+            <!-- Changes card -->
+            <div class="blk blk-card">
+              <div class="pt-2.5">
+                <div class="overflow-hidden rounded-lg border">
+                  <div class="flex items-center justify-between gap-2 px-3 py-1.5">
+                    <span class="text-2xs font-medium text-muted-foreground">Changes</span>
+                  </div>
+                  <div class="flex items-center gap-2 border-t px-3 py-2">
+                    <svg data-icon viewBox="0 0 12 12" class="size-3.5 shrink-0 text-muted-foreground">
+                      <path d="M1.58085821,5.00961425 L6,0.497201828 L10.465645,5.00961425 L10.3568823,11.4294992 L7.42763494,11.4294992 L7.42763494,7.98969453 C5.54247058,7.98969453 4.59988839,7.98969453 4.59988839,7.98969453 C4.59988839,7.98969453 4.59988839,9.13629609 4.59988839,11.4294992 L1.58085821,11.4294992 L1.58085821,5.00961425 Z" fill-opacity="0.15" />
+                      <path d="M6.80201493,0.332177379 L10.8486176,4.6439827 L10.8824063,4.67785636 C10.9557812,4.76486796 11,4.87727006 11,5 L11,10.8 C11,11.4585556 10.4778929,12 9.825,12 L7.5,12 C7.22385763,12 7,11.7761424 7,11.5 L7,8.46666667 C7,8.35242224 6.91730713,8.26666667 6.825,8.26666667 L5.175,8.26666667 C5.08269287,8.26666667 5,8.35242224 5,8.46666667 L5,11.5 C5,11.7761424 4.77614237,12 4.5,12 L2.175,12 C1.52210713,12 1,11.4585556 1,10.8 L1,5 C1,4.86550844 1.05310016,4.74341908 1.13947908,4.65355334 L5.19782342,0.331775385 C5.64126542,-0.110658794 6.35917876,-0.110658794 6.80201493,0.332177379 Z M5.90454749,1.03926442 L2,5.19899998 L2,10.8 C2,10.9142444 2.08269287,11 2.175,11 L4,11 L4,8.46666667 C4,7.84927082 4.45888322,7.33480469 5.05421077,7.27290812 L5.175,7.26666667 L6.825,7.26666667 C7.47789287,7.26666667 8,7.80811109 8,8.46666667 L8,11 L9.825,11 C9.90192261,11 9.97216865,10.9404475 9.99344725,10.854483 L10,10.8 L10,5.2 L5.90454749,1.03926442 Z" />
+                    </svg>
+                    <span class="flex-1 truncate">Home</span>
+                    <span class="shrink-0 text-muted-foreground">3 Layers</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Composer -->
+        <div class="border-t p-3 shrink-0">
+          <div class="flex flex-col rounded-lg bg-input">
+            <div class="relative min-h-[84px] px-3 pt-2.5 pb-1 leading-relaxed">
+              <span class="ph absolute left-3 top-2.5 text-muted-foreground/50">Ask Ycode...</span>
+              <span class="typed-line"><span class="typed">Add a CTA button to the hero</span></span><span class="caret-gate"><span class="caret"></span></span>
+            </div>
+
+            <div class="flex items-center justify-between gap-1 px-2 pb-2">
+              <div class="h-6 px-2 rounded-md flex items-center gap-1.5 text-muted-foreground">
+                <span>Claude Sonnet 4.5</span>
+                <svg data-icon viewBox="0 0 12 12" class="size-3" fill="none">
+                  <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </div>
+
+              <div class="flex items-center gap-1">
+                <div class="h-6 px-1.5 rounded-md flex items-center text-muted-foreground">
+                  <svg data-icon viewBox="0 0 12 12" class="size-3">
+                    <path d="M0.949235404,0.0276963715 L1.0419909,0.0598982767 L11.5377854,4.43263057 C12.1391927,4.68318741 12.1472583,5.50893272 11.5996671,5.79081608 L11.4904914,5.83702262 L8.031,7.012 L10.7890176,9.77030444 C11.0703275,10.0516143 11.0703275,10.5077077 10.7890176,10.7890176 C10.5293469,11.0486882 10.1207483,11.0686629 9.83816566,10.8489416 L9.77030444,10.7890176 L7.012,8.031 L5.83702262,11.4904914 C5.63701736,12.0793515 4.87774154,12.164067 4.53247897,11.711862 L4.47283158,11.6207735 L4.43263057,11.5377854 L0.0598982767,1.0419909 C-0.185095847,0.453935695 0.363085012,-0.135897631 0.949235404,0.0276963715 Z M1.214,1.214 L5.102,10.545 L6.48223259,6.48223259 L10.545,5.102 L1.214,1.214 Z" />
+                  </svg>
+                </div>
+                <div class="h-6 px-1.5 rounded-md flex items-center text-muted-foreground">
+                  <svg data-icon viewBox="0 0 12 12" class="size-3">
+                    <path d="M9.5,0 C10.8807119,0 12,1.11928813 12,2.5 L12,9.5 C12,10.8807119 10.8807119,12 9.5,12 L2.5,12 C1.11928813,12 0,10.8807119 0,9.5 L0,2.5 C0,1.11928813 1.11928813,0 2.5,0 L9.5,0 Z M8.442,5.483 L2.883,11 L9.5,11 C10.2796961,11 10.9204487,10.4051119 10.9931334,9.64446001 L11,9.5 L11,8.04 L8.442,5.483 Z M9.5,1 L2.5,1 C1.67157288,1 1,1.67157288 1,2.5 L1,9.5 C1,10.0334305 1.2784455,10.5018266 1.69791949,10.7677712 L8.09225065,4.42287 C8.26600922,4.25044016 8.53462842,4.23175974 8.72894321,4.3665041 L8.79799784,4.42422439 L11,6.626 L11,2.5 C11,1.72030388 10.4051119,1.07955132 9.64446001,1.00686658 L9.5,1 Z M4,3 C4.55228475,3 5,3.44771525 5,4 C5,4.55228475 4.55228475,5 4,5 C3.44771525,5 3,4.55228475 3,4 C3,3.44771525 3.44771525,3 4,3 Z" />
+                  </svg>
+                </div>
+                <div class="send-btn size-6 rounded-md bg-secondary text-muted-foreground flex items-center justify-center">
+                  <svg data-icon viewBox="0 0 12 12" class="size-3 rotate-90">
+                    <path d="M10.6568456,2 L10.6568456,10 L9.65684563,10 L9.65684563,3.725 L3.94822117,9.43396196 L3.21821555,8.70395634 L8.92284563,2.999 L2.65684563,3 L2.65684563,2 L10.6568456,2 Z" transform="translate(6.656846,6) rotate(-135.1) translate(-6.656846,-6)" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>
