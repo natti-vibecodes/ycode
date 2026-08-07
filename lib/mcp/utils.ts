@@ -290,7 +290,14 @@ function parseInlineMarks(text: string): TiptapNode[] {
       nodes.push({
         type: 'text',
         text: match[3],
-        marks: [{ type: 'richTextLink', attrs: { href: match[4], linkType: 'url' } }],
+        // `generateLinkHref` reads LinkSettings — `{ type, url.data.content }` — and
+        // returns null for anything else, so the old `{ href, linkType }` shape made
+        // every markdown link in MCP-authored rich text render as `#`. Matches the
+        // shape `lib/markdown-to-tiptap.ts` already uses for the same mark.
+        marks: [{
+          type: 'richTextLink',
+          attrs: { type: 'url', url: { type: 'dynamic_text', data: { content: match[4] } } },
+        }],
       });
     }
     lastIndex = match.index + match[0].length;
