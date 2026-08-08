@@ -70,3 +70,7 @@ next-env.d.ts
 
 # scripts
 release.sh
+# local operational helper for this install — writes live secrets into .env.
+# No credentials in the file itself, but it is machine-specific and has no
+# business in a fork of upstream.
+setup-env.sh
