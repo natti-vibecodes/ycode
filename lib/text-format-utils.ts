@@ -579,6 +579,30 @@ function renderTextNode(
  * When useSpanForParagraphs is true (default), block elements render as spans
  * to avoid invalid HTML nesting inside restrictive tags like <p> or <h1>.
  */
+/** Visible text of a Tiptap block — used to derive heading anchor ids. */
+function extractBlockText(node: any): string {
+  if (!node || typeof node !== 'object') return '';
+  if (node.type === 'text') return node.text || '';
+  if (!Array.isArray(node.content)) return '';
+  return node.content.map(extractBlockText).join('');
+}
+
+/**
+ * Slugify heading text for an anchor id. Mirrors the SSR renderer
+ * (page-fetcher.ts tiptapHeadingSlug) and the static generator's slugify so
+ * anchors are identical across SSR, hydration, and the migrated static site.
+ */
+function headingAnchorSlug(text: string): string {
+  const base = text
+    .replace(/<[^>]+>/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .trim()
+    .replace(/[\s-]+/g, '-')
+    .slice(0, 60);
+  return base || 'section';
+}
+
 function renderNestedRichTextContent(
   richTextValue: any,
   key: string,
@@ -612,6 +636,10 @@ function renderNestedRichTextContent(
   }
 
   if (parsed.type === 'doc' && Array.isArray(parsed.content)) {
+    // Fresh per-document heading-anchor registry — see renderRichText.
+    if (linkContext) {
+      (linkContext as any).__headingIds = new Map<string, number>();
+    }
     return parsed.content.map((block: any, blockIdx: number) =>
       renderBlock(block, blockIdx, collectionItemData, pageCollectionItemData, textStyles, useSpanForParagraphs, isEditMode, linkContext, timezone, layerDataMap, components, renderComponentBlock, ancestorComponentIds)
     ).filter(Boolean);
@@ -889,6 +917,20 @@ function renderBlock(
     }
 
     const headingProps: Record<string, any> = { key, className: headingClass };
+    // Stable anchor id on real headings, matching the SSR renderer
+    // (page-fetcher.ts renderTiptapToHtml) so hydration keeps the id and
+    // table-of-contents / deep links stay working. Skipped for span fallback.
+    if (tag !== 'span') {
+      const registry = (linkContext as any)?.__headingIds as Map<string, number> | undefined;
+      const base = headingAnchorSlug(extractBlockText(block));
+      let headingId = base;
+      if (registry) {
+        const nth = (registry.get(base) || 0) + 1;
+        registry.set(base, nth);
+        if (nth > 1) headingId = `${base}-${nth}`;
+      }
+      headingProps.id = headingId;
+    }
     if (isEditMode) {
       headingProps['data-style'] = styleKey;
     }
@@ -1249,6 +1291,11 @@ export function renderRichText(
   }
 
   let visibleBlockIdx = 0;
+  // Fresh per-document heading-anchor registry (dedup: repeat heading text
+  // gets a -2 / -3 suffix), matching the SSR renderer's behaviour.
+  if (linkContext) {
+    (linkContext as any).__headingIds = new Map<string, number>();
+  }
   return doc.content.map((block: any, idx: number) => {
     const element = renderBlock(block, idx, collectionItemData, pageCollectionItemData, textStyles, useSpanForParagraphs, isEditMode, linkContext, timezone, layerDataMap, components, renderComponentBlock, ancestorComponentIds);
     const isVisibleBlock = block.type !== 'paragraph' || block.content?.length;

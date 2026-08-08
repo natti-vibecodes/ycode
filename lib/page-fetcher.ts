@@ -4317,6 +4317,30 @@ type RenderComponentHtmlFn = (
   preResolvedLayers?: Layer[],
 ) => string;
 
+/** Flatten a Tiptap node's visible text — used to derive heading anchor ids. */
+function tiptapPlainText(node: any): string {
+  if (!node || typeof node !== 'object') return '';
+  if (node.type === 'text') return node.text || '';
+  if (!Array.isArray(node.content)) return '';
+  return node.content.map(tiptapPlainText).join('');
+}
+
+/**
+ * Slugify heading text for an anchor id. Deliberately mirrors the static
+ * generator's `slugify` (tools/gen_article.py) so deep links and table-of-contents
+ * anchors stay identical across the migration.
+ */
+function tiptapHeadingSlug(text: string): string {
+  const base = text
+    .replace(/<[^>]+>/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .trim()
+    .replace(/[\s-]+/g, '-')
+    .slice(0, 60);
+  return base || 'section';
+}
+
 function renderTiptapToHtml(
   content: any,
   textStyles?: Record<string, any>,
@@ -4412,8 +4436,11 @@ function renderTiptapToHtml(
     const innerHtml = content.content && content.content.length > 0
       ? content.content.map((node: any) => renderTiptapToHtml(node, textStyles, renderComponentHtml, linkContext)).join('')
       : '\u00A0';
-    // Wrap in span with paragraph styles for proper block display
-    return `<span class="${escapeHtml(paragraphClass)}">${innerHtml}</span>`;
+    // Real <p>, not <span>: rich-text bodies are the site's primary indexable
+    // content, and a wall of spans strips the semantics search engines and answer
+    // engines read. Rich text renders inside a block layer (div/section), so a
+    // block-level tag here is valid HTML.
+    return `<p class="${escapeHtml(paragraphClass)}">${innerHtml}</p>`;
   }
 
   // Handle heading
@@ -4426,8 +4453,21 @@ function renderTiptapToHtml(
     const innerHtml = content.content && content.content.length > 0
       ? content.content.map((node: any) => renderTiptapToHtml(node, textStyles, renderComponentHtml, linkContext)).join('')
       : '\u00A0';
-    // Use span to avoid nesting issues (h1 inside p is invalid)
-    return `<span class="${escapeHtml(headingClass)}">${innerHtml}</span>`;
+    // Real <hN> with a stable anchor id. Headings are the structure search engines
+    // and answer engines extract, and the id is what table-of-contents links and
+    // deep links target \u2014 neither survives if this collapses to a <span>. Rich text
+    // renders inside a block layer (div/section), so a heading tag is valid here.
+    // The id slug mirrors tools/gen_article.py's slugify so anchors survive the
+    // static-site migration unchanged.
+    const headingRegistry = (linkContext as any)?.__headingIds as Map<string, number> | undefined;
+    const slugBase = tiptapHeadingSlug(tiptapPlainText(content));
+    let headingId = slugBase;
+    if (headingRegistry) {
+      const nth = (headingRegistry.get(slugBase) || 0) + 1;
+      headingRegistry.set(slugBase, nth);
+      if (nth > 1) headingId = `${slugBase}-${nth}`;
+    }
+    return `<h${level} id="${escapeHtml(headingId)}" class="${escapeHtml(headingClass)}">${innerHtml}</h${level}>`;
   }
 
   // Handle doc (root)
@@ -5322,6 +5362,9 @@ export function layerToHtml(
         layerDataMap: effectiveLayerDataMap,
         pageCollectionSortedItemIds: pageLinkContext?.pageCollectionSortedItemIds,
       };
+      // Per-document registry for heading anchor ids: duplicate heading text gets
+      // a -2 / -3 suffix, matching the static generator's behaviour.
+      (richTextLinkContext as any).__headingIds = new Map<string, number>();
       textContent = renderTiptapToHtml(textVariable.data.content, layer.textStyles, componentRenderer, richTextLinkContext);
       isRichText = true;
     }
