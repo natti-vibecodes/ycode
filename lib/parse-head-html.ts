@@ -16,6 +16,28 @@ export const HTML_TO_REACT_ATTRS: Record<string, string> = {
   'nomodule': 'noModule',
   'referrerpolicy': 'referrerPolicy',
   'fetchpriority': 'fetchPriority',
+  'playsinline': 'playsInline',
+  // SVG presentation attributes. Imported markup (custom code, pasted icon sets)
+  // carries these hyphenated; React wants camelCase and warns loudly for each
+  // occurrence — one console error per icon on the page.
+  'stroke-width': 'strokeWidth',
+  'stroke-linecap': 'strokeLinecap',
+  'stroke-linejoin': 'strokeLinejoin',
+  'stroke-dasharray': 'strokeDasharray',
+  'stroke-dashoffset': 'strokeDashoffset',
+  'stroke-miterlimit': 'strokeMiterlimit',
+  'stroke-opacity': 'strokeOpacity',
+  'fill-rule': 'fillRule',
+  'fill-opacity': 'fillOpacity',
+  'clip-rule': 'clipRule',
+  'clip-path': 'clipPath',
+  'stop-color': 'stopColor',
+  'stop-opacity': 'stopOpacity',
+  'vector-effect': 'vectorEffect',
+  'shape-rendering': 'shapeRendering',
+  'text-anchor': 'textAnchor',
+  'dominant-baseline': 'dominantBaseline',
+  'paint-order': 'paintOrder',
 };
 
 const TAG_REGEX =
