@@ -10,6 +10,7 @@ import { dispatchFormSubmittedEvent } from '@/lib/services/webhookService';
 import { sendFormSubmissionEmail, extractReplyToEmail } from '@/lib/services/emailService';
 import { processAppIntegrations } from '@/lib/apps/integration-service';
 import { noCache } from '@/lib/api-response';
+import { buildSubmissionMetadata, formatLeadWriteFailure } from '@/lib/form-attribution';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -75,18 +76,41 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Extract metadata from request if not provided
-    const metadata = body.metadata || {
-      user_agent: request.headers.get('user-agent') || undefined,
-      referrer: request.headers.get('referer') || undefined,
-      // Note: IP is typically handled by the proxy/edge, not available directly
-    };
-
-    const submission = await createFormSubmission({
-      form_id: body.form_id,
+    // Merge client-sent metadata (page_url) with what the server can see, and parse the
+    // hidden attribution field into queryable JSON. Previously this was `body.metadata || {…}`,
+    // so user_agent and referrer were never captured: the client always sends a metadata
+    // object, which meant the fallback branch never ran. See lib/form-attribution.ts.
+    const metadata = buildSubmissionMetadata({
+      clientMetadata: body.metadata,
       payload: body.payload,
-      metadata,
+      userAgent: request.headers.get('user-agent'),
+      referrer: request.headers.get('referer'),
     });
+
+    // A lead that reaches us must never be lost to an error page. If the write fails, record
+    // everything needed to recover it by hand and still tell the visitor it worked — they have
+    // already decided to get in touch, and an error costs us the prospect, not just the row.
+    let submission;
+    try {
+      submission = await createFormSubmission({
+        form_id: body.form_id,
+        payload: body.payload,
+        metadata,
+      });
+    } catch (dbError) {
+      console.error(
+        formatLeadWriteFailure({
+          formId: body.form_id,
+          payload: body.payload,
+          metadata,
+          error: dbError,
+        })
+      );
+      return NextResponse.json(
+        { data: null, message: 'Form submitted successfully' },
+        { status: 201 }
+      );
+    }
 
     // Dispatch webhook event (fire and forget)
     dispatchFormSubmittedEvent({
