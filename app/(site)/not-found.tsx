@@ -1,7 +1,8 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { unstable_cache } from 'next/cache';
 import { fetchErrorPage, slimPageData } from '@/lib/page-fetcher';
-import { fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
+import { fetchGlobalPageSettings, generatePageMetadata } from '@/lib/generate-page-metadata';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { tenantStore } from '@/lib/supabase-server';
 import PageRenderer from '@/components/PageRenderer';
@@ -17,6 +18,24 @@ function fetchCachedCustom404(tenantId?: string) {
     ['error-404'],
     { tags: ['all-pages'], revalidate: false }
   )();
+}
+
+/**
+ * The custom 404 page carries its own SEO settings, but this route exported no
+ * metadata at all — so every 404 fell back to the root layout's default and
+ * served `Ycode - Visual Website Builder` as its title, ignoring what the user
+ * configured. The error-page *preview* route already did this correctly; only
+ * the live route was missing it.
+ *
+ * Reuses the same cached fetch as the render below, so this costs no extra query.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const tenantId = tenantStore.getStore();
+  const errorPageData = await fetchCachedCustom404(tenantId).catch(() => null);
+  if (!errorPageData) {
+    return { title: 'Page not found', robots: { index: false, follow: false } };
+  }
+  return generatePageMetadata(errorPageData.page);
 }
 
 /**
