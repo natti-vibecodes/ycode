@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { isWorkspaceMember } from '@/lib/roles';
 
 /**
  * Public API routes that skip authentication.
@@ -116,7 +117,19 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
     );
   }
 
-  // Authenticated — pass through with any refreshed cookies
+  // Authenticated is not authorised (SCA-1220). Signup is open, so a valid session proves
+  // only that someone registered — not that they were ever invited to this workspace.
+  // Membership means an explicitly assigned role in app_metadata; see isWorkspaceMember,
+  // which must not be swapped for resolveRole (it defaults missing roles to `designer`).
+  // No DB round-trip: the role travels in the user record getUser() already returned.
+  if (!isWorkspaceMember(user)) {
+    return NextResponse.json(
+      { error: 'Not authorised for this workspace' },
+      { status: 403 }
+    );
+  }
+
+  // Authenticated and a member — pass through with any refreshed cookies
   const authResponse = NextResponse.next({ request });
   response.cookies.getAll().forEach((cookie) => {
     authResponse.cookies.set(cookie.name, cookie.value);

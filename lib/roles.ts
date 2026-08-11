@@ -19,6 +19,23 @@ export function extractRoleFromUser(user: { app_metadata?: Record<string, unknow
   return (user?.app_metadata?.role as UserRole) || null;
 }
 
+/**
+ * Membership test for the builder gate (SCA-1220).
+ *
+ * Authentication is not authorisation: with open signup, anyone can hold a valid session
+ * without ever having been invited. A user belongs to this workspace only if they carry an
+ * EXPLICITLY assigned role in app_metadata — which is writable solely via the Admin API or
+ * SQL, never by the user themselves.
+ *
+ * Deliberately built on extractRoleFromUser rather than resolveRole. resolveRole DEFAULTS a
+ * missing role to `designer`, which is right for "what may this member do?" but catastrophic
+ * for "is this person a member at all?" — it would hand every self-registered stranger a
+ * designer role and wave them through. See the regression test.
+ */
+export function isWorkspaceMember(user: { app_metadata?: Record<string, unknown> } | null): boolean {
+  return extractRoleFromUser(user) !== null;
+}
+
 export function canManageMembers(role: UserRole): boolean {
   return role === 'owner' || role === 'admin';
 }
