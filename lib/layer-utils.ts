@@ -1904,8 +1904,70 @@ export function regenerateInteractionIds(
 }
 
 /**
+ * Remap collection layer references through an old->new layer ID map.
+ * Covers `collection_layer_id` on field variable data and `collectionLayerId` on
+ * conditional-visibility/filter conditions, wherever they appear in a layer's
+ * variables — including inline-variable JSON embedded in text content.
+ * References to layers outside the map (external collection layers) are left
+ * unchanged so downstream validation can strip them as genuinely out of scope.
+ * Copy-on-write: returns the input value unchanged if nothing was remapped.
+ */
+function remapCollectionLayerRefs<T>(value: T, idMap: Map<string, string>): T {
+  if (typeof value === 'string') {
+    // Inline variables embed field-binding JSON inside <ycode-inline-variable> tags
+    if (!value.includes('<ycode-inline-variable>')) return value;
+    let changed = false;
+    const result = value.replace(INLINE_VAR_REGEX, (match, content) => {
+      try {
+        const parsed = JSON.parse(content.trim());
+        const remapped = remapCollectionLayerRefs(parsed, idMap);
+        if (remapped !== parsed) {
+          changed = true;
+          return `<ycode-inline-variable>${JSON.stringify(remapped)}</ycode-inline-variable>`;
+        }
+      } catch { /* not valid JSON, leave as-is */ }
+      return match;
+    });
+    return (changed ? result : value) as T;
+  }
+
+  if (Array.isArray(value)) {
+    let changed = false;
+    const result = value.map((item) => {
+      const remapped = remapCollectionLayerRefs(item, idMap);
+      if (remapped !== item) changed = true;
+      return remapped;
+    });
+    return (changed ? result : value) as T;
+  }
+
+  if (value && typeof value === 'object') {
+    let changed = false;
+    const result: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+    for (const [key, v] of Object.entries(result)) {
+      if ((key === 'collection_layer_id' || key === 'collectionLayerId') && typeof v === 'string' && idMap.has(v)) {
+        result[key] = idMap.get(v)!;
+        changed = true;
+      } else {
+        const remapped = remapCollectionLayerRefs(v, idMap);
+        if (remapped !== v) {
+          result[key] = remapped;
+          changed = true;
+        }
+      }
+    }
+    return (changed ? result : value) as T;
+  }
+
+  return value;
+}
+
+/**
  * Regenerate layer IDs, interaction IDs, tween IDs, and remap self-targeted interactions
- * When duplicating/pasting layers, all IDs must be regenerated to avoid conflicts
+ * When duplicating/pasting layers, all IDs must be regenerated to avoid conflicts.
+ * CMS bindings that reference a collection layer inside the copied subtree
+ * (variables.*.data.collection_layer_id, condition.collectionLayerId) are remapped
+ * to the fresh IDs; references to layers outside the subtree are left unchanged.
  */
 export function regenerateIdsWithInteractionRemapping(layer: Layer): Layer {
   // Track old layer ID -> new layer ID mapping
@@ -1935,6 +1997,15 @@ export function regenerateIdsWithInteractionRemapping(layer: Layer): Layer {
         ...updatedLayer,
         interactions: regenerateInteractionIds(l.interactions, idMap),
       };
+    }
+
+    // Remap CMS collection layer references so bindings keep pointing at the
+    // copied collection layer (now under a fresh ID) rather than the original
+    if (l.variables) {
+      const remappedVariables = remapCollectionLayerRefs(l.variables, idMap);
+      if (remappedVariables !== l.variables) {
+        updatedLayer = { ...updatedLayer, variables: remappedVariables };
+      }
     }
 
     // Recursively process children
