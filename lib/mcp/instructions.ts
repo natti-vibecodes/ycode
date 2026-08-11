@@ -652,7 +652,15 @@ automatically); never raw HTML or plain text expecting formatting.
    page_id_target = the dynamic page, and NO collection_item_id — it resolves per item.
 
 Show/hide ANY layer conditionally (sale badges, empty states) with set_layer_visibility —
-same condition model as set_collection_filters.`,
+same condition model as set_collection_filters.
+
+**Dynamic-page SEO vs custom code (different binding syntaxes):**
+- SEO title/description: bind fields with \`<ycode-inline-variable>\` tags (same as set_dynamic_text).
+- Custom code head/body: bind fields with \`{{FieldName}}\` placeholders (exact collection field
+  names). Image/file fields resolve to their URL; use \`{{Reference.NestedField}}\` for references.
+  NEVER put \`<ycode-inline-variable>\` in custom code — tokens are printed literally and break
+  JSON-LD. Example JSON-LD in custom_code.head:
+  \`<script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"{{Name}}","image":"{{Cover Image}}"}</script>\``,
 
   localization: `### Locales & Translations — Detailed Guide
 
