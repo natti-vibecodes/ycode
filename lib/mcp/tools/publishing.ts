@@ -17,6 +17,7 @@ import { publishFolders } from '@/lib/services/folderService';
 import { publishCSS, savePublishedAt } from '@/lib/services/settingsService';
 import { generateAndSaveDraftCSS } from '@/lib/server/cssGenerator';
 import { clearAllCache } from '@/lib/services/cacheService';
+import { isPublishAllowed, publishBlockedMessage } from '@/lib/publish-guard';
 
 /** Count draft locales not yet present in the published set (new languages awaiting publish). */
 async function countUnpublishedLocales(): Promise<number> {
@@ -74,9 +75,18 @@ export function registerPublishingTools(server: McpServer) {
 
   server.tool(
     'publish',
-    'Publish all draft changes to make them live. This publishes pages, collections, components, styles, assets, and regenerates CSS.',
+    'Publish all draft changes to make them live. This publishes pages, collections, components, styles, assets, and regenerates CSS. Disabled for agent sessions unless PUBLISH_ALLOWED and PUBLISH_ALLOWED_MCP are set — publishing is global and ships every other session\'s drafts too (SCA-1227).',
     {},
     async () => {
+      // Gate first: publishing is global, so a stray call here ships every other
+      // session's pending work. See lib/publish-guard.ts.
+      if (!isPublishAllowed('mcp')) {
+        return {
+          content: [{ type: 'text' as const, text: publishBlockedMessage('mcp') }],
+          isError: true,
+        };
+      }
+
       const publishedAt = new Date().toISOString();
       const changes: Record<string, number> = {};
 

@@ -28,6 +28,7 @@ import { getColorVariablesHash } from '@/lib/repositories/colorVariableRepositor
 import { publishGlobalVariables, hardDeleteSoftDeletedGlobalVariables } from '@/lib/repositories/globalVariableRepository';
 import { getSettingByKey, setSetting } from '@/lib/repositories/settingsRepository';
 import type { Setting, PublishStats, PublishTableStats } from '@/types';
+import { isPublishAllowed, publishBlockedMessage } from '@/lib/publish-guard';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -130,6 +131,12 @@ function createEmptyStats(): PublishStats {
 export async function POST(request: NextRequest) {
   const startTime = performance.now();
   const stats = createEmptyStats();
+
+  // Gate before any work: publishing is global, so one call ships every pending draft
+  // across the site. Default-deny until PUBLISH_ALLOWED is set. See lib/publish-guard.ts.
+  if (!isPublishAllowed('ui')) {
+    return noCache({ error: publishBlockedMessage('ui') }, 403);
+  }
 
   try {
     const body: PublishRequest = await request.json().catch(() => ({}));
