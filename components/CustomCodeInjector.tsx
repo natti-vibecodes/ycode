@@ -14,6 +14,30 @@ interface CustomCodeInjectorProps {
 const ALREADY_FIRED_EVENTS = new Set(['DOMContentLoaded', 'load']);
 
 /**
+ * Marker type used to park scripts in the server-rendered markup.
+ *
+ * Unlike `innerHTML`, scripts present in the initial document are executed by
+ * the parser — before React hydrates. That would run every snippet twice (once
+ * at parse, once from the effect below) and, worse, let a snippet mutate the DOM
+ * out from under React and blow up hydration. Giving them an unknown `type`
+ * makes the parser skip them; the effect restores the real type to run them once.
+ */
+const INERT_TYPE = 'text/ycode-deferred';
+const ORIGINAL_TYPE_ATTR = 'data-ycode-type';
+
+/** Neutralise `<script>` opening tags so the HTML parser will not execute them. */
+function deferScripts(html: string): string {
+  return html.replace(/<script\b([^>]*)>/gi, (_match, attrs: string) => {
+    const existing = /\stype\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/i.exec(attrs);
+    const stripped = existing ? attrs.replace(existing[0], '') : attrs;
+    const preserved = existing
+      ? ` ${ORIGINAL_TYPE_ATTR}=${existing[1].startsWith('"') || existing[1].startsWith("'") ? existing[1] : `"${existing[1]}"`}`
+      : '';
+    return `<script${stripped}${preserved} type="${INERT_TYPE}">`;
+  });
+}
+
+/**
  * Patch `addEventListener` on `document`/`window` so registrations for events
  * that already fired during page load run the listener asynchronously. Returns
  * a restore function. Scoped to the injection window to avoid affecting the
@@ -57,21 +81,44 @@ function installFiredEventShim(): () => void {
 }
 
 /**
- * Injects custom HTML/script code after React hydration.
- * Renders an empty container on SSR to avoid hydration mismatches,
- * then injects and executes scripts via useEffect on the client.
- * External scripts are loaded sequentially to preserve dependency order.
+ * Renders custom HTML on the server and executes its scripts after hydration.
+ *
+ * The markup is server-rendered via `dangerouslySetInnerHTML`. That matters for
+ * SEO: sites keep their nav and footer in custom code, and injecting those only
+ * on the client left the whole internal link graph out of the served HTML —
+ * invisible to any crawler that does not execute JavaScript.
+ *
+ * Scripts still run on the client, because that is the part that genuinely
+ * cannot be server-rendered. Markup parsed from `innerHTML` /
+ * `dangerouslySetInnerHTML` is inert either way, so the existing
+ * recreate-and-replace pass is unchanged — it now simply operates on nodes that
+ * arrived with the document instead of ones written in on mount. React does not
+ * diff `dangerouslySetInnerHTML` children, so there is no hydration mismatch.
  */
 export default function CustomCodeInjector({ html }: CustomCodeInjectorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  // Markup that is already in the DOM — server-rendered on first paint, so the
+  // effect must not rewrite it and throw away the scripts it just executed.
+  const renderedHtml = useRef<string | null>(html);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    container.innerHTML = html;
+    if (renderedHtml.current !== html) {
+      container.innerHTML = html;
+      renderedHtml.current = html;
+    }
 
     const scripts = Array.from(container.querySelectorAll('script'));
+    // Restore the real type on the parked scripts so recreating them executes.
+    for (const script of scripts) {
+      if (script.getAttribute('type') !== INERT_TYPE) continue;
+      const original = script.getAttribute(ORIGINAL_TYPE_ATTR);
+      script.removeAttribute(ORIGINAL_TYPE_ATTR);
+      if (original) script.setAttribute('type', original);
+      else script.removeAttribute('type');
+    }
     let cancelled = false;
 
     // Make listeners for already-fired load events run while scripts execute.
@@ -102,5 +149,11 @@ export default function CustomCodeInjector({ html }: CustomCodeInjectorProps) {
     return () => { cancelled = true; restoreShim(); };
   }, [html]);
 
-  return <div ref={containerRef} />;
+  return (
+    <div
+      ref={containerRef}
+      suppressHydrationWarning
+      dangerouslySetInnerHTML={{ __html: deferScripts(html) }}
+    />
+  );
 }
