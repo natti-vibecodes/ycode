@@ -128,6 +128,18 @@ describe('buildPublishManifest (SCA-1272)', () => {
     assert.doesNotMatch(m.summary, /not publishable/);
   });
 
+  test('a dynamic page keeps its verification target, with the placeholder called out', () => {
+    // Silently dropping it leaves the template unverified; handing it over bare gives a URL
+    // that 404s for a reason that has nothing to do with the change.
+    const m = buildPublishManifest({
+      queued: { pages: [{ id: 'p-ins', name: 'Insight' }], components: [] },
+      components: [NEWSLETTER],
+      pages: [{ id: 'p-ins', name: 'Insight', layers: [], url: '/insight/{slug}' }],
+    });
+    assert.equal(m.verify.length, 1);
+    assert.match(m.verify[0].expect, /substitute a real item slug/);
+  });
+
   test('nothing queued produces an empty, honest manifest', () => {
     const m = buildPublishManifest({ queued: { pages: [], components: [] }, components: [NEWSLETTER], pages: PAGES });
     assert.deepEqual(m.willShip, []);

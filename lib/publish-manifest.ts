@@ -132,7 +132,12 @@ export function buildPublishManifest(input: ManifestInput): PublishManifest {
   // them would hand back a check that fails for a reason unrelated to the change.
   const verify = [...byPage.values()].filter((e) => e.publishable).map((e) => ({
     url: e.url,
-    expect: 'the change you made — fetch this URL and grep for a marker that is PRESENT when the fix is in',
+    // A dynamic page's path carries a placeholder (`/insight/{slug}`). Dropping it from the list
+    // would leave that template unverified and silent; handing it over as-is gives a URL that
+    // 404s for a reason unrelated to the change. Keep it, and say what to substitute.
+    expect: e.url.includes('{')
+      ? 'dynamic page — substitute a real item slug for the placeholder, then grep for a marker that is PRESENT when the fix is in'
+      : 'the change you made — fetch this URL and grep for a marker that is PRESENT when the fix is in',
   }));
 
   const boot = input.bootCommit ?? null;
