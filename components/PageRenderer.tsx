@@ -914,6 +914,16 @@ export default async function PageRenderer({
         <CustomCodeInjector html={mountedCustomCode.bodyStart} />
       )}
 
+      {/* The page's content is its <main> landmark (SCA-1281). Without it, the first substantive
+          text in the document is whatever the site keeps in custom code above the page — on this
+          site, the nav mega-menu's blurb, identical on all 14 commercial pages including the
+          privacy policy, and ~4800 characters ahead of the real H1. Assistants and readers
+          answering "what is this page about" get the menu instead of the page.
+
+          Chrome stays outside: nav renders before this (via data-ycode-mount), footer and scripts
+          after, which is what makes the landmark meaningful rather than decorative. The article
+          and legal templates already did this — only the page-builder path was missing it. */}
+      <main>
       <div
         id="ybody"
         className="contents"
@@ -962,6 +972,7 @@ export default async function PageRenderer({
           />
         )}
       </div>
+      </main>
 
       {/* Initialize GSAP animations based on layer interactions.
           Skipped entirely when no layer has interactions so we don't ship
