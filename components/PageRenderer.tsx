@@ -2,6 +2,7 @@ import AnimationInitializer from '@/components/AnimationInitializer';
 import BodyClassApplier from '@/components/BodyClassApplier';
 import ContentHeightReporter from '@/components/ContentHeightReporter';
 import CustomCodeInjector from '@/components/CustomCodeInjector';
+import { splitCustomCodeByMount } from '@/lib/custom-code-mount';
 import HreflangAlternateLinks from '@/components/HreflangAlternateLinks';
 import LayerRendererPublic from '@/components/LayerRendererPublic';
 import SliderInitializer from '@/components/SliderInitializer';
@@ -391,6 +392,10 @@ export default async function PageRenderer({
   ycodeBadge = true,
   passwordProtection,
 }: PageRendererProps) {
+  // Chrome that declares data-ycode-mount is rendered in its final position (before the page
+  // content) instead of at the end and moved there by a script on load. Sites that declare
+  // nothing get `rest === globalCustomCodeBody` and are unaffected.
+  const mountedCustomCode = splitCustomCodeByMount(globalCustomCodeBody);
   const usePublishedData = page.is_published && !isPreview;
   // Check if this is a 401 error page that needs password form
   const is401Page = page.error_page === 401;
@@ -898,6 +903,17 @@ export default async function PageRenderer({
         />
       )}
 
+      {/* Custom-code chrome that declared data-ycode-mount="body-start" — rendered HERE, before
+          the page content, so a sticky nav is already in its final position in the server HTML.
+          This is what removes the need for a script to move it on load: that move ran from an
+          effect, which can fire before React has finished hydrating, changing the DOM underneath
+          hydration. Hydration then fails and React re-renders on the client, where it does not
+          execute scripts inside dangerouslySetInnerHTML — killing every custom-code behaviour at
+          once. See lib/custom-code-mount.ts. */}
+      {mountedCustomCode.bodyStart && (
+        <CustomCodeInjector html={mountedCustomCode.bodyStart} />
+      )}
+
       <div
         id="ybody"
         className="contents"
@@ -961,9 +977,10 @@ export default async function PageRenderer({
       {/* Report content height to parent for zoom calculations (preview only) */}
       {!page.is_published && <ContentHeightReporter />}
 
-      {/* Inject global custom body code (applies to all pages) */}
-      {globalCustomCodeBody && (
-        <CustomCodeInjector html={globalCustomCodeBody} />
+      {/* Inject global custom body code (applies to all pages), minus anything that declared
+          its own mount point above. */}
+      {mountedCustomCode.rest && (
+        <CustomCodeInjector html={mountedCustomCode.rest} />
       )}
 
       {/* Inject page-specific custom body code */}
