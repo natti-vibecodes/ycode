@@ -741,13 +741,36 @@ function buildLinkAttrs(link: LinkSettings): string[] {
   return attrs;
 }
 
+/**
+ * Mirror the renderer's link handling: `resolveExportTag` already turns a linked
+ * div/button INTO the `<a>`, but every other layer type is WRAPPED in one
+ * (LayerRendererPublic's `willWrapWithLink`). Without this the export silently
+ * dropped the link on a linked text/span/image layer — the markup still looked
+ * complete, so it read as "there is no link here" rather than as a gap.
+ */
+function wrapExportWithLink(layer: Layer, tag: string, el: string, pad: string): string {
+  if (tag === 'a') return el;
+  const link = layer.variables?.link;
+  if (link?.type !== 'url' || !link.url?.data.content) return el;
+  const attrs = buildLinkAttrs(link).join(' ');
+  const body = el.startsWith(pad) ? el.slice(pad.length) : el;
+  return `${pad}<a ${attrs}>${body}</a>`;
+}
+
 function layerToHtmlString(layer: Layer, indent: number): string {
   const pad = '  '.repeat(indent);
   const tag = resolveExportTag(layer);
   const classes = getClassesString(layer);
 
   const attrs: string[] = [];
-  if (classes) attrs.push(`class="${escapeHtml(classes)}"`);
+  // `class` from customAttributes REPLACES the generated Tailwind, exactly as
+  // applyCustomAttributes does at render time (it assigns className, no merge).
+  // Emitting the generated list here instead would show markup the site never
+  // serves — which is worse than omitting it, because it reads as verified.
+  const customAttributes = layer.settings?.customAttributes;
+  const classOverride = customAttributes?.class ?? customAttributes?.className;
+  const effectiveClasses = classOverride ?? classes;
+  if (effectiveClasses) attrs.push(`class="${escapeHtml(effectiveClasses)}"`);
 
   if (layer.attributes?.id) {
     attrs.push(`id="${escapeHtml(layer.attributes.id)}"`);
@@ -804,10 +827,26 @@ function layerToHtmlString(layer: Layer, indent: number): string {
     if (layer.name === 'video') attrs.push('playsinline');
   }
 
+  // Remaining custom attributes (style, data-*, aria-*, role, type, …). `class` is
+  // already folded in above; skip any key an earlier branch has emitted so we never
+  // produce a duplicate attribute.
+  if (customAttributes) {
+    const emitted = new Set(
+      attrs.map((a) => a.slice(0, a.indexOf('=')).trim()).filter(Boolean),
+    );
+    for (const [name, value] of Object.entries(customAttributes)) {
+      const lower = name.toLowerCase();
+      if (lower === 'class' || lower === 'classname') continue;
+      if (emitted.has(name)) continue;
+      attrs.push(`${name}="${escapeHtml(String(value))}"`);
+      emitted.add(name);
+    }
+  }
+
   const attrStr = attrs.length > 0 ? ` ${attrs.join(' ')}` : '';
 
   if (SELF_CLOSING_TAGS.has(tag)) {
-    return `${pad}<${tag}${attrStr} />`;
+    return wrapExportWithLink(layer, tag, `${pad}<${tag}${attrStr} />`, pad);
   }
 
   if (layer.name === 'icon') {
@@ -815,26 +854,26 @@ function layerToHtmlString(layer: Layer, indent: number): string {
     if (iconSrc && iconSrc.type === 'static_text') {
       return `${pad}${(iconSrc.data as any).content}`;
     }
-    return `${pad}<span${attrStr}></span>`;
+    return wrapExportWithLink(layer, tag, `${pad}<span${attrStr}></span>`, pad);
   }
 
   const textHtml = getLayerTextHtml(layer);
   const openTag = `${pad}<${tag}${attrStr}>`;
   const closeTag = `</${tag}>`;
 
+  let el: string;
   if (textHtml && (!layer.children || layer.children.length === 0)) {
-    return `${openTag}${textHtml}${closeTag}`;
+    el = `${openTag}${textHtml}${closeTag}`;
+  } else if (!layer.children || layer.children.length === 0) {
+    el = `${openTag}${closeTag}`;
+  } else {
+    const childHtml = layer.children
+      .map((child) => layerToHtmlString(child, indent + 1))
+      .join('\n');
+    el = `${openTag}\n${childHtml}\n${pad}${closeTag}`;
   }
 
-  if (!layer.children || layer.children.length === 0) {
-    return `${openTag}${closeTag}`;
-  }
-
-  const childHtml = layer.children
-    .map((child) => layerToHtmlString(child, indent + 1))
-    .join('\n');
-
-  return `${openTag}\n${childHtml}\n${pad}${closeTag}`;
+  return wrapExportWithLink(layer, tag, el, pad);
 }
 
 /**
