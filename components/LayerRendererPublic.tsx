@@ -19,6 +19,7 @@ import type { Layer, Locale, FormSettings, Component, DesignColorVariable, Passw
 import { getLayerHtmlTag, getClassesString, getText, resolveFieldValue, isTextContentLayer, getCollectionVariable, filterDisabledSliderLayers, applyCustomAttributes } from '@/lib/layer-utils';
 import { getMapIframeProps, DEFAULT_MAP_SETTINGS, resolveMarkerColor } from '@/lib/map-utils';
 import { HTML_TO_REACT_ATTRS } from '@/lib/parse-head-html';
+import { FORM_SUCCESS_EVENT, FORM_ERROR_EVENT, buildFormEventDetail, dispatchFormEvent } from '@/lib/form-events';
 import { SWIPER_CLASS_MAP, SWIPER_DATA_ATTR_MAP } from '@/lib/slider-constants';
 import { getSliderPresizeVars } from '@/lib/slider-utils';
 import { getDynamicTextContent, getImageUrlFromVariable, getVideoUrlFromVariable, getIframeUrlFromVariable, isFieldVariable, isAssetVariable, isStaticTextVariable, isDynamicTextVariable, getStaticTextContent, getAssetId, resolveDesignStyles } from '@/lib/variable-utils';
@@ -1335,6 +1336,13 @@ const LayerItem: React.FC<{
           if (successAlert) successAlert.style.display = 'none';
 
           if (response.ok) {
+            // Announce success BEFORE any redirect: navigation cancels in-flight work, and a
+            // redirect-on-success form would otherwise be the one shape that never reports.
+            dispatchFormEvent(form, FORM_SUCCESS_EVENT, buildFormEventDetail({
+              formId,
+              pageUrl: typeof window !== 'undefined' ? window.location.href : '',
+            }));
+
             // Success handling
             const successAction = formSettings?.success_action || 'message';
 
@@ -1363,6 +1371,11 @@ const LayerItem: React.FC<{
             // Reset the form
             form.reset();
           } else {
+            dispatchFormEvent(form, FORM_ERROR_EVENT, buildFormEventDetail({
+              formId,
+              pageUrl: typeof window !== 'undefined' ? window.location.href : '',
+              status: response.status,
+            }));
             // Error handling - show error alert
             if (errorAlert) {
               errorAlert.style.display = '';
@@ -1370,6 +1383,10 @@ const LayerItem: React.FC<{
           }
         } catch (error) {
           console.error('Form submission error:', error);
+          dispatchFormEvent(form, FORM_ERROR_EVENT, buildFormEventDetail({
+            formId,
+            pageUrl: typeof window !== 'undefined' ? window.location.href : '',
+          }));
           // Show error alert on catch
           const errorAlert = form.querySelector('[data-alert-type="error"]') as HTMLElement | null;
           if (errorAlert) {
