@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { resolveNewPagePublishable } from '@/lib/page-publishable';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getAllPages, getPageById, getPagesByFolder, createPage, updatePage, deletePage, duplicatePage } from '@/lib/repositories/pageRepository';
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
@@ -49,14 +50,14 @@ export function registerPageTools(server: McpServer) {
     'create_page',
     `Create a new page. Returns the created page with its ID. The page is unpublished — use the publish tool to make it live.
 
-DRAFT STATUS: Set is_publishable to false to keep this page as a draft that is skipped when the site is published (it will not go live until you flip it back to publishable). Defaults to publishable.`,
+DRAFT STATUS: New pages are created as DRAFTS and are skipped when the site is published. Pass is_publishable true to allow the page to go live on the next publish.`,
     {
       name: z.string().describe('Page title (e.g. "About Us", "Contact")'),
       slug: z.string().optional().describe('URL slug. Auto-generated from name if omitted.'),
       page_folder_id: z.string().nullable().optional().describe('Parent folder ID, or null for root'),
       is_index: z.boolean().optional().describe('Set to true to make this the homepage'),
       is_dynamic: z.boolean().optional().describe('Set to true for CMS dynamic pages'),
-      is_publishable: z.boolean().optional().describe('Set to false to keep the page as a draft that is excluded from publishing. Defaults to true.'),
+      is_publishable: z.boolean().optional().describe('Allow the page to go live on the next publish. Defaults to FALSE (draft) so a new page never ships unintentionally.'),
     },
     async (args) => {
       const isIndex = args.is_index || false;
@@ -70,7 +71,8 @@ DRAFT STATUS: Set is_publishable to false to keep this page as a draft that is s
         name: args.name,
         slug,
         is_published: false,
-        ...(args.is_publishable !== undefined ? { is_publishable: args.is_publishable } : {}),
+        // Default to DRAFT — see lib/page-publishable.ts for why forgetting must fail safe.
+        is_publishable: resolveNewPagePublishable(args.is_publishable),
         page_folder_id: folderId,
         order: maxOrder + 1,
         depth: 0,

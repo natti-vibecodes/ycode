@@ -880,6 +880,10 @@ export async function duplicatePage(pageId: string): Promise<Page> {
       name: newName,
       slug: newSlug,
       is_published: false, // Always create as unpublished
+      // A duplicate is a draft too (SCA-1254). This previously set nothing and inherited the
+      // column default, so duplicating a live page produced a page that would ship on the next
+      // publish — the copy going live before anyone had edited a word of it.
+      is_publishable: false,
       page_folder_id: originalPage.page_folder_id,
       order: newOrder,
       depth: originalPage.depth,
