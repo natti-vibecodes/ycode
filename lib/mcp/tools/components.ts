@@ -802,6 +802,16 @@ Pass variant_id to target a specific named variant; omit it to update the primar
           style_id: z.string().describe('Layer style ID to apply'),
         }),
         z.object({
+          type: z.literal('update_settings'),
+          layer_id: z.string().describe('Layer ID or ref_id'),
+          tag: z.string().optional().describe('HTML tag override: h1-h6, p, span, div, section, form, input, etc.'),
+          html_id: z.string().optional().describe('Custom HTML element id'),
+          form_id: z.string().optional()
+            .describe('For form layers: the id submissions are grouped under in the Forms screen.'),
+          custom_attributes: z.record(z.string(), z.string()).optional()
+            .describe('Custom HTML attributes as { name: value }. REPLACES the existing map, so pass every attribute you want kept (including class).'),
+        }),
+        z.object({
           type: z.literal('delete_layer'),
           layer_id: z.string(),
         }),
@@ -993,6 +1003,30 @@ Pass variant_id to target a specific named variant; omit it to update the primar
               if (!layer) { results.push({ op: i, status: 'error', detail: `Layer "${op.layer_id}" not found` }); continue; }
               layers = updateLayerById(layers, layerId, (l) => ({ ...l, styleId: op.style_id }));
               results.push({ op: i, status: 'ok', detail: `Applied style to "${layer.customName || layer.name}"` });
+              break;
+            }
+
+            case 'update_settings': {
+              // Without this, a layer inside a component could be restyled and retargeted but
+              // never have its ATTRIBUTES changed — so a componentized section could not carry
+              // a working form (form id, input names, or an onsubmit that does not cancel),
+              // could not wear the site's own CSS classes, and could not be repaired in place.
+              // The only route was detaching the instance, which trades away reuse on every page.
+              const layerId = refMap.get(op.layer_id) || op.layer_id;
+              const layer = findLayerById(layers, layerId);
+              if (!layer) { results.push({ op: i, status: 'error', detail: `Layer "${op.layer_id}" not found` }); continue; }
+              layers = updateLayerById(layers, layerId, (l) => {
+                const settings = { ...(l.settings ?? {}) } as Record<string, unknown>;
+                if (op.tag !== undefined) settings.tag = op.tag;
+                if (op.html_id !== undefined) settings.html_id = op.html_id;
+                if (op.form_id !== undefined) settings.id = op.form_id;
+                // Replaces rather than merges, matching update_layer_settings on pages: a
+                // partial map would make removing an attribute impossible, and removing
+                // `onsubmit="return false;"` is exactly what a ported form needs.
+                if (op.custom_attributes !== undefined) settings.customAttributes = op.custom_attributes;
+                return { ...l, settings } as typeof l;
+              });
+              results.push({ op: i, status: 'ok', detail: `Updated settings on "${layer.customName || layer.name}"` });
               break;
             }
 
