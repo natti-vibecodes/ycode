@@ -144,7 +144,30 @@ export default function CustomCodeInjector({ html }: CustomCodeInjectorProps) {
       }
     }
 
-    executeScripts().finally(restoreShim);
+    executeScripts().finally(() => {
+      restoreShim();
+      if (cancelled) return;
+      // Then re-fire the load lifecycle for anything the shim did not catch.
+      //
+      // The shim only rescues listeners registered synchronously while a script executes, and
+      // patching addEventListener is easy to slip past — a script that registers from a
+      // callback, a bundle that grabbed a reference earlier, or simply a pass where the shim
+      // was already restored. Custom code overwhelmingly bootstraps on DOMContentLoaded, and
+      // by the time these scripts run (after hydration) that event fired long ago, so anything
+      // missed stays dormant forever: no reveals, no galleries, no nav behaviour, silently.
+      //
+      // Dispatching afterwards is the belt to the shim's braces and covers every registration
+      // path. Handlers the shim already invoked were removed from the listener list at that
+      // point, so this does not double-fire them.
+      for (const type of ALREADY_FIRED_EVENTS) {
+        try {
+          document.dispatchEvent(new Event(type));
+          if (type === 'load') window.dispatchEvent(new Event(type));
+        } catch (error) {
+          console.error(`Custom code ${type} replay failed:`, error);
+        }
+      }
+    });
 
     return () => { cancelled = true; restoreShim(); };
   }, [html]);

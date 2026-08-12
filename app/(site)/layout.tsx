@@ -2,7 +2,7 @@ import '@/app/site.css';
 import type { Metadata } from 'next';
 import RootLayoutShell, { defaultMetadata } from '@/components/RootLayoutShell';
 import { fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
-import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
+import { renderRootLayoutHeadCode, extractHtmlAttributes } from '@/lib/parse-head-html';
 
 export async function generateMetadata(): Promise<Metadata> {
   if (process.env.SKIP_SETUP === 'true') {
@@ -35,6 +35,7 @@ export default async function SiteLayout({
   children: React.ReactNode;
 }>) {
   let headElements: React.ReactNode[] = [];
+  let htmlAttributes: Record<string, string> = {};
 
   // Cloud mode uses ISR with explicit tenantId — calling headers() here
   // would force all pages dynamic. Cloud injects global head code from PageRenderer instead.
@@ -43,6 +44,8 @@ export default async function SiteLayout({
       const globalSettings = await fetchGlobalPageSettings();
       if (globalSettings.globalCustomCodeHead) {
         headElements = renderRootLayoutHeadCode(globalSettings.globalCustomCodeHead);
+        // Attributes a pre-paint script cannot set durably — React strips them at hydration.
+        htmlAttributes = extractHtmlAttributes(globalSettings.globalCustomCodeHead);
       }
     } catch {
       // Supabase not configured — skip custom code
@@ -53,7 +56,10 @@ export default async function SiteLayout({
   // smoothing — matching legacy output. Forcing `antialiased` here would render
   // glyphs thinner/lighter than the original site.
   return (
-    <RootLayoutShell headElements={headElements} bodyClassName="font-sans">
+    <RootLayoutShell
+      headElements={headElements} htmlAttributes={htmlAttributes}
+      bodyClassName="font-sans"
+    >
       {children}
     </RootLayoutShell>
   );

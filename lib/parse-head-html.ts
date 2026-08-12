@@ -152,3 +152,52 @@ export function renderRootLayoutHeadCode(html: string, prefix = 'global-head'): 
 
   return elements;
 }
+
+/**
+ * Attributes a site wants rendered on `<html>` by the server.
+ *
+ * Declared in global custom head code next to the pre-paint script it complements:
+ *
+ *   <meta name="ycode:html-attributes" content='{"data-theme":"light"}'>
+ *
+ * Why this exists: a script in custom head code CANNOT durably set attributes on `<html>`.
+ * It executes at parse time as expected, but React strips attributes it does not know about
+ * when it hydrates `<html>`, so a pre-paint theme stamp is applied and then silently removed
+ * — taking every `[data-theme=…]` rule with it and leaving the site unstyled. Declaring them
+ * here renders them into the served markup instead, which both survives hydration and removes
+ * the flash of unthemed content the pre-paint script was there to prevent.
+ *
+ * Only `data-*`, `class`, `lang` and `dir` are allowed: enough for theming and locale, while
+ * keeping arbitrary attributes (and anything event-handler shaped) off the root element.
+ */
+const ALLOWED_HTML_ATTR = /^(data-[a-z0-9-]+|class|lang|dir)$/i;
+
+export function extractHtmlAttributes(html: string | null | undefined): Record<string, string> {
+  if (!html) return {};
+
+  const meta = /<meta\b[^>]*\bname\s*=\s*["']ycode:html-attributes["'][^>]*>/i.exec(html);
+  if (!meta) return {};
+
+  const content = /\bcontent\s*=\s*("([^"]*)"|'([^']*)')/i.exec(meta[0]);
+  const raw = content?.[2] ?? content?.[3];
+  if (!raw) return {};
+
+  let parsed: unknown;
+  try {
+    // Custom code is authored by hand, so a stray quote must not take the page down —
+    // an unparseable declaration degrades to "no attributes", not a 500.
+    parsed = JSON.parse(raw.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&'));
+  } catch {
+    return {};
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!ALLOWED_HTML_ATTR.test(key)) continue;
+    if (typeof value !== 'string' && typeof value !== 'number') continue;
+    out[key === 'class' ? 'className' : key] = String(value);
+  }
+  return out;
+}
