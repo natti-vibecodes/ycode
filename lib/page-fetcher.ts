@@ -662,11 +662,14 @@ async function fetchPageByPathInternal(
               );
               await ensureCmsTranslations(translations, [collectionItem.id]);
               enhancedItemValues = applyCmsTranslations(collectionItem.id, enhancedItemValues, collectionFields, translations, { includeIncomplete: !isPublished });
+              const rawMetaItemValues = { ...enhancedItemValues };
               enhancedItemValues = formatDateFieldsInItemValues(enhancedItemValues, collectionFields, timezone);
 
               const enhancedCollectionItem = {
                 ...collectionItem,
                 values: enhancedItemValues,
+                // Pre-format snapshot for consumers that need machine-readable values (SCA-1294).
+                rawValues: rawMetaItemValues,
               };
 
               return {
@@ -719,6 +722,9 @@ async function fetchPageByPathInternal(
             const enhancedCollectionItem = {
               ...collectionItem,
               values: enhancedItemValues,
+              // Pre-format snapshot: `values` holds display dates ("Aug 12, 2026"), which is right
+              // for rendered layers and wrong for anything machine-readable. See SCA-1294.
+              rawValues: rawItemValues,
             };
 
             // Translate component-instance override values first, so the translated

@@ -1192,6 +1192,20 @@ export interface CollectionItemValue {
 // Helper type for working with items + values
 export interface CollectionItemWithValues extends CollectionItem {
   values: Record<string, string>; // field_id (UUID) -> value
+  /**
+   * The same map BEFORE display formatting is applied (SCA-1294).
+   *
+   * `values` is what rendered layers should use: dates in it read "Aug 12, 2026", which is the
+   * right answer for a human and the wrong one for anything a machine parses. Article JSON-LD
+   * shipped `"datePublished":"Aug 12, 2026"` on 109 articles that way — schema.org requires
+   * ISO 8601, so Google dropped the field and the dated rich result with it. The stored data was
+   * correct the whole time; only the read had been reformatted.
+   *
+   * Populated on the dynamic-page paths in page-fetcher. Consumers producing machine-readable
+   * output (custom-code placeholders, structured data, feeds) must prefer this and fall back to
+   * `values` — it is absent wherever no formatting pass ran, and there it has nothing to add.
+   */
+  rawValues?: Record<string, string>;
   publish_status?: 'new' | 'updated' | 'deleted'; // Status badge for publish modal
 }
 

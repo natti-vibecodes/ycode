@@ -96,6 +96,28 @@ describe('CMS field → custom code interpolation', () => {
     assert.deepEqual(JSON.parse(display(castValue(JSON.stringify(arr), 'text'))), arr);
   });
 
+  test('REGRESSION (SCA-1294): placeholders read the PRE-FORMAT values', () => {
+    // `values` carries display dates for rendered layers ("Aug 12, 2026"). Custom-code
+    // placeholders are machine-readable output, so they must read `rawValues` — schema.org
+    // requires ISO 8601, and the display form shipped invalid datePublished on 109 articles.
+    const item = {
+      values:    { 'f-date': 'Aug 12, 2026', 'f-title': 'Hello' },
+      rawValues: { 'f-date': '2026-08-12',   'f-title': 'Hello' },
+    };
+    const pick = (i: typeof item) => i.rawValues ?? i.values;
+    assert.equal(pick(item)['f-date'], '2026-08-12');
+    assert.match(pick(item)['f-date'], /^\d{4}-\d{2}-\d{2}$/);
+    // Non-date fields are identical in both maps — reading raw changes nothing for them.
+    assert.equal(pick(item)['f-title'], item.values['f-title']);
+  });
+
+  test('an item with no rawValues falls back to values, not to empty', () => {
+    // rawValues is absent wherever no formatting pass ran; there the two maps are the same.
+    const item: { values: Record<string, string>; rawValues?: Record<string, string> } =
+      { values: { 'f-1': 'only' } };
+    assert.equal((item.rawValues ?? item.values)['f-1'], 'only');
+  });
+
   test('a circular object yields empty rather than [object Object]', () => {
     const circular: Record<string, unknown> = {}; circular.self = circular;
     assert.equal(display(circular), '');

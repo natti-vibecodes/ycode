@@ -60,12 +60,12 @@ async function resolveFieldDisplayValue(
     return buildAbsoluteAssetUrl(await getBaseUrl(), url) ?? url;
   }
 
-  // castValue speculatively JSON.parses any text field whose content starts with `{` or `[`
-  // (lib/collection-utils.ts), so a field holding JSON-LD arrives here as an OBJECT. String()
-  // on an object yields the literal "[object Object]" — which, inside an ld+json script tag,
-  // ships structurally invalid schema on every page using that field, silently. Serialize it
-  // back instead: `String(someObject)` is never the intended output anywhere, so this can only
-  // improve a call site, never change a working one (SCA-1282).
+  // Belt and suspenders. `castValue` used to speculatively JSON.parse any text field starting
+  // with `{` or `[`, so a field holding JSON-LD arrived here as an OBJECT and String() yielded
+  // the literal "[object Object]" inside an ld+json tag — structurally invalid schema, shipped
+  // silently (SCA-1282). SCA-1283 removed that parse at the source, so nothing should reach this
+  // branch now. It stays anyway: `String(someObject)` is never the intended output anywhere, so
+  // this can only improve a call site, never change a working one.
   if (typeof rawValue === 'object') {
     try {
       return JSON.stringify(rawValue);
@@ -126,7 +126,7 @@ async function resolveFieldPath(
  */
 async function resolvePlaceholderToken(
   token: string,
-  collectionItem: CollectionItemWithValues,
+  values: Record<string, string>,
   fieldsByName: Map<string, CollectionField>,
   isPublished: boolean,
   getBaseUrl: SiteBaseUrlResolver,
@@ -135,7 +135,7 @@ async function resolvePlaceholderToken(
   const segments = token.split('.').map(segment => segment.trim());
   if (segments.some(segment => segment.length === 0)) return null;
 
-  return resolveFieldPath(segments, fieldsByName, collectionItem.values, isPublished, getBaseUrl, tenantId);
+  return resolveFieldPath(segments, fieldsByName, values, isPublished, getBaseUrl, tenantId);
 }
 
 /**
@@ -158,6 +158,12 @@ export async function resolveCustomCodePlaceholders(
 
   const fieldsByName = new Map(fields.map(field => [field.name, field]));
 
+  // Placeholders in custom code are overwhelmingly machine-readable output — JSON-LD, meta tags,
+  // feeds — so they read the PRE-FORMAT values. `values` carries display dates ("Aug 12, 2026"),
+  // which shipped structurally invalid `datePublished` on every article until SCA-1294. Falls
+  // back to `values` where no formatting pass ran and the two are identical anyway.
+  const itemValues = collectionItem.rawValues ?? collectionItem.values;
+
   // Resolve the site base URL at most once, and only when an asset placeholder
   // actually needs to be absolutized.
   let baseUrlPromise: Promise<string | null> | null = null;
@@ -171,7 +177,7 @@ export async function resolveCustomCodePlaceholders(
   for (const [, rawToken] of code.matchAll(PLACEHOLDER_REGEX)) {
     const token = rawToken.trim();
     if (resolvedTokens.has(token)) continue;
-    resolvedTokens.set(token, await resolvePlaceholderToken(token, collectionItem, fieldsByName, isPublished, getBaseUrl, options.tenantId));
+    resolvedTokens.set(token, await resolvePlaceholderToken(token, itemValues, fieldsByName, isPublished, getBaseUrl, options.tenantId));
   }
 
   return code.replace(PLACEHOLDER_REGEX, (match, rawToken) => {
