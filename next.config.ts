@@ -27,7 +27,35 @@ if (process.env.SUPABASE_URL) {
   }
 }
 
+/**
+ * The commit this server process is booting from (SCA-1272, SCA-1298).
+ *
+ * Read HERE, in the Next config, because this file is evaluated once in a plain Node context
+ * before the server starts and is never bundled for any runtime. The previous home for this —
+ * `instrumentation.ts` importing a module that used `node:child_process` — was compiled for the
+ * EDGE runtime too, where both `child_process` and `process.cwd()` are illegal. That failed to
+ * build on every on-demand compile and buried the log (1,544 errors in 21 minutes), which is
+ * what made a tester's page churn while she tried to work.
+ *
+ * The value is inlined only into modules that reference it, and the sole reference is
+ * server-side, so it does not reach client bundles.
+ */
+function bootCommit(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { execFileSync } = require('node:child_process');
+    return execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: process.cwd(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3_000,
+    }).trim();
+  } catch {
+    return ''; // no git (container, deploy artifact) — the drift check simply stays quiet
+  }
+}
+
 const nextConfig: NextConfig = {
+  env: {
+    YCODE_BOOT_COMMIT: bootCommit(),
+  },
   trailingSlash: false,
   staticPageGenerationTimeout: 120,
   experimental: {

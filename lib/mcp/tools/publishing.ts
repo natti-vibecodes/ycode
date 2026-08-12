@@ -23,7 +23,8 @@ import { getAllDraftLayers } from '@/lib/repositories/pageLayersRepository';
 import { getAllDraftPageFolders } from '@/lib/repositories/pageFolderRepository';
 import { buildSlugPath } from '@/lib/page-utils';
 import { buildPublishManifest } from '@/lib/publish-manifest';
-import { BOOT_COMMIT, readHeadCommit } from '@/lib/boot-commit';
+import { BOOT_COMMIT } from '@/lib/boot-commit';
+import { readHeadCommit } from '@/lib/head-commit-server';
 import type { Layer, Page } from '@/types';
 
 /** Count draft locales not yet present in the published set (new languages awaiting publish). */
