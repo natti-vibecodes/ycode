@@ -18,6 +18,35 @@ export const HTML_TO_REACT_ATTRS: Record<string, string> = {
   'referrerpolicy': 'referrerPolicy',
   'fetchpriority': 'fetchPriority',
   'playsinline': 'playsInline',
+  // Form attributes. Every one of these is a case-only rename React refuses to accept in its
+  // HTML spelling: it logs "Invalid DOM property" and DROPS the prop, so `autocomplete="email"`
+  // authored on a layer silently never reached the input. Console noise was the visible half;
+  // the attribute quietly not applying was the real cost (SCA-1309).
+  'autocomplete': 'autoComplete',
+  'novalidate': 'noValidate',
+  'formnovalidate': 'formNoValidate',
+  'formaction': 'formAction',
+  'formmethod': 'formMethod',
+  'formtarget': 'formTarget',
+  'formenctype': 'formEncType',
+  'enctype': 'encType',
+  'acceptcharset': 'acceptCharset',
+  'maxlength': 'maxLength',
+  'minlength': 'minLength',
+  'readonly': 'readOnly',
+  'inputmode': 'inputMode',
+  'enterkeyhint': 'enterKeyHint',
+  'autocapitalize': 'autoCapitalize',
+  'spellcheck': 'spellCheck',
+  'autocorrect': 'autoCorrect',
+  // General HTML attributes with the same problem.
+  'accesskey': 'accessKey',
+  'contenteditable': 'contentEditable',
+  'datetime': 'dateTime',
+  'srcset': 'srcSet',
+  'usemap': 'useMap',
+  'colspan': 'colSpan',
+  'rowspan': 'rowSpan',
   // SVG presentation attributes. Imported markup (custom code, pasted icon sets)
   // carries these hyphenated; React wants camelCase and warns loudly for each
   // occurrence — one console error per icon on the page.
