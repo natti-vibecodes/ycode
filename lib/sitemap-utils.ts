@@ -28,6 +28,19 @@ export interface SitemapUrl {
 export type SitemapAlternate = HreflangAlternate;
 
 /**
+ * Whether a page belongs in the public index at all.
+ *
+ * Exported and shared on purpose: sitemap.xml and llms.txt must never disagree about what is
+ * live. Two copies of this rule would look identical the day they are written and drift the
+ * first time one of them is edited (SCA-1121).
+ */
+export function isIndexablePage(page: Page): boolean {
+  if (page.settings?.seo?.noindex) return false;
+  if (page.error_page != null) return false; // 401 / 404 / 500
+  return true;
+}
+
+/**
  * Build sitemap URLs for a static page (non-dynamic)
  */
 function buildStaticPageUrls(
@@ -38,13 +51,7 @@ function buildStaticPageUrls(
   locales: Locale[],
   translationsByLocale: Map<string, Record<string, Translation>>
 ): SitemapUrl[] {
-  // Always skip pages with noindex
-  if (page.settings?.seo?.noindex) {
-    return [];
-  }
-
-  // Skip error pages (401, 404, 500)
-  if (page.error_page != null) {
+  if (!isIndexablePage(page)) {
     return [];
   }
 
@@ -87,13 +94,7 @@ function buildDynamicPageUrls(
   locales: Locale[],
   translationsByLocale: Map<string, Record<string, Translation>>
 ): SitemapUrl[] {
-  // Always skip error pages (401, 404, 500)
-  if (page.error_page != null) {
-    return [];
-  }
-
-  // Always skip pages with noindex
-  if (page.settings?.seo?.noindex) {
+  if (!isIndexablePage(page)) {
     return [];
   }
 
