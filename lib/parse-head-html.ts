@@ -18,10 +18,12 @@ export const HTML_TO_REACT_ATTRS: Record<string, string> = {
   'referrerpolicy': 'referrerPolicy',
   'fetchpriority': 'fetchPriority',
   'playsinline': 'playsInline',
-  // Form attributes. Every one of these is a case-only rename React refuses to accept in its
-  // HTML spelling: it logs "Invalid DOM property" and DROPS the prop, so `autocomplete="email"`
-  // authored on a layer silently never reached the input. Console noise was the visible half;
-  // the attribute quietly not applying was the real cost (SCA-1309).
+  // Form attributes: case-only renames React wants in camelCase. Given the HTML spelling it
+  // logs "Invalid DOM property" per occurrence — but it still passes the attribute through, so
+  // the rendered markup was CORRECT all along (verified on the served page: the input carried
+  // `autocomplete="email"` both before and after this map entry). The value here is therefore
+  // the console staying readable, plus React handling these as the props it knows rather than
+  // as unrecognised pass-throughs — not a rescued attribute (SCA-1309).
   'autocomplete': 'autoComplete',
   'novalidate': 'noValidate',
   'formnovalidate': 'formNoValidate',
