@@ -60,6 +60,20 @@ async function resolveFieldDisplayValue(
     return buildAbsoluteAssetUrl(await getBaseUrl(), url) ?? url;
   }
 
+  // castValue speculatively JSON.parses any text field whose content starts with `{` or `[`
+  // (lib/collection-utils.ts), so a field holding JSON-LD arrives here as an OBJECT. String()
+  // on an object yields the literal "[object Object]" — which, inside an ld+json script tag,
+  // ships structurally invalid schema on every page using that field, silently. Serialize it
+  // back instead: `String(someObject)` is never the intended output anywhere, so this can only
+  // improve a call site, never change a working one (SCA-1282).
+  if (typeof rawValue === 'object') {
+    try {
+      return JSON.stringify(rawValue);
+    } catch {
+      return ''; // circular structure — an empty field beats "[object Object]" in the markup
+    }
+  }
+
   return String(rawValue);
 }
 
