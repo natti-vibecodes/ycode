@@ -11,6 +11,7 @@ import { getLocaleScaffoldTranslations, getCmsTranslationsForItems } from '@/lib
 import { getTranslatableKey } from '@/lib/locale-runtime';
 import type { Page, PageFolder, PageLayers, Component, ComponentVariable, CollectionItemWithValues, CollectionField, Layer, CollectionPaginationMeta, Translation, Locale } from '@/types';
 import { getCollectionVariable, resolveFieldValue, evaluateVisibility, evaluateCondition, getLayerHtmlTag, filterDisabledSliderLayers } from '@/lib/layer-utils';
+import { buildAnchorMap, headingAnchorSlug, tiptapPlainText as sharedTiptapPlainText } from '@/lib/heading-anchors';
 import { isFieldVariable, isAssetVariable, createDynamicTextVariable, createDynamicRichTextVariable, createAssetVariable, getDynamicTextContent, getVariableStringValue, getAssetId, resolveDesignStyles } from '@/lib/variable-utils';
 import { buildImageSizes, generateImageSrcset, getOptimizedImageUrl, getAssetProxyUrl, DEFAULT_ASSETS, collectLayerAssetIds, buildSvgDataUrl, parseImageDimension, getSvgAspectRatioStyle } from '@/lib/asset-utils';
 import { resolveComponents, applyComponentOverrides } from '@/lib/resolve-components';
@@ -4289,23 +4290,7 @@ function resolveRichTextImageAssets(
 /**
  * Build a map of layerId -> anchor value (attributes.id) for O(1) anchor resolution
  */
-export function buildAnchorMap(layers: Layer[]): Record<string, string> {
-  const map: Record<string, string> = {};
-
-  const traverse = (layerList: Layer[]) => {
-    for (const layer of layerList) {
-      if (layer.attributes?.id) {
-        map[layer.id] = layer.attributes.id;
-      }
-      if (layer.children) {
-        traverse(layer.children);
-      }
-    }
-  };
-
-  traverse(layers);
-  return map;
-}
+export { buildAnchorMap } from '@/lib/heading-anchors';
 
 /**
  * Render Tiptap JSON content to HTML string
@@ -4324,28 +4309,15 @@ type RenderComponentHtmlFn = (
 ) => string;
 
 /** Flatten a Tiptap node's visible text — used to derive heading anchor ids. */
-function tiptapPlainText(node: any): string {
-  if (!node || typeof node !== 'object') return '';
-  if (node.type === 'text') return node.text || '';
-  if (!Array.isArray(node.content)) return '';
-  return node.content.map(tiptapPlainText).join('');
-}
+// Shared with the layer-heading anchor pre-pass — see lib/heading-anchors.ts.
+const tiptapPlainText = sharedTiptapPlainText;
 
 /**
  * Slugify heading text for an anchor id. Deliberately mirrors the static
  * generator's `slugify` (tools/gen_article.py) so deep links and table-of-contents
  * anchors stay identical across the migration.
  */
-function tiptapHeadingSlug(text: string): string {
-  const base = text
-    .replace(/<[^>]+>/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .trim()
-    .replace(/[\s-]+/g, '-')
-    .slice(0, 60);
-  return base || 'section';
-}
+const tiptapHeadingSlug = headingAnchorSlug;
 
 function renderTiptapToHtml(
   content: any,

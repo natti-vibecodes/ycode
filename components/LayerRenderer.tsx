@@ -56,29 +56,7 @@ import AnimationInitializer from '@/components/AnimationInitializer';
 import { transformLayerIdsForInstance, resolveVariableLinks } from '@/lib/resolve-components';
 
 import type { DesignColorVariable } from '@/types';
-
-/**
- * Build a map of layerId -> anchor value (attributes.id) for O(1) anchor resolution
- * Recursively traverses the layer tree once
- */
-function buildAnchorMap(layers: Layer[]): Record<string, string> {
-  const map: Record<string, string> = {};
-
-  const traverse = (layerList: Layer[]) => {
-    for (const layer of layerList) {
-      // Only add to map if layer has a custom id attribute set
-      if (layer.attributes?.id) {
-        map[layer.id] = layer.attributes.id;
-      }
-      if (layer.children) {
-        traverse(layer.children);
-      }
-    }
-  };
-
-  traverse(layers);
-  return map;
-}
+import { buildAnchorMap } from '@/lib/heading-anchors';
 
 interface LayerRendererProps {
   layers: Layer[];
@@ -2323,6 +2301,10 @@ const LayerItemImpl: React.FC<{
       elementProps.id = layer.settings.id;
     } else if (layer.attributes?.id) {
       elementProps.id = layer.attributes.id;
+    } else if (anchorMap?.[layer.id]) {
+      // Derived heading anchor (SCA-1313). buildAnchorMap only fills this for headings that
+      // have no explicit id, so an author-set id always wins and this can never overwrite one.
+      elementProps.id = anchorMap[layer.id];
     }
 
     // Apply custom attributes from settings (map HTML attr names to JSX equivalents)

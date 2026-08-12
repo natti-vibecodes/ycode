@@ -35,6 +35,7 @@ import { combineBgValues, mergeStaticBgVars } from '@/lib/tailwind-class-mapper'
 import { clsx } from 'clsx';
 import type { HiddenLayerInfo } from '@/lib/animation-utils';
 import { transformLayerIdsForInstance } from '@/lib/resolve-components';
+import { buildAnchorMap } from '@/lib/heading-anchors';
 
 /**
  * Per-layer-type code splitting.
@@ -62,29 +63,6 @@ function layerTreeHasInteractions(layers: Layer[]): boolean {
     if (layer.children && layerTreeHasInteractions(layer.children)) return true;
   }
   return false;
-}
-
-/**
- * Build a map of layerId -> anchor value (attributes.id) for O(1) anchor resolution
- * Recursively traverses the layer tree once
- */
-function buildAnchorMap(layers: Layer[]): Record<string, string> {
-  const map: Record<string, string> = {};
-
-  const traverse = (layerList: Layer[]) => {
-    for (const layer of layerList) {
-      // Only add to map if layer has a custom id attribute set
-      if (layer.attributes?.id) {
-        map[layer.id] = layer.attributes.id;
-      }
-      if (layer.children) {
-        traverse(layer.children);
-      }
-    }
-  };
-
-  traverse(layers);
-  return map;
 }
 
 interface LayerRendererPublicProps {
@@ -1029,6 +1007,10 @@ const LayerItem: React.FC<{
       elementProps.id = layer.settings.id;
     } else if (layer.attributes?.id) {
       elementProps.id = layer.attributes.id;
+    } else if (anchorMap?.[layer.id]) {
+      // Derived heading anchor (SCA-1313). buildAnchorMap only fills this for headings that
+      // have no explicit id, so an author-set id always wins and this can never overwrite one.
+      elementProps.id = anchorMap[layer.id];
     }
 
     // Apply custom attributes from settings (map HTML attr names to JSX equivalents)

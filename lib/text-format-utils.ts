@@ -8,6 +8,7 @@ import { applyComponentOverrides, resolveComponents } from '@/lib/resolve-compon
 import type { GlobalFieldMeta } from '@/lib/collection-field-utils';
 import { getDefaultFormatId, isFormatValidForFieldType } from '@/lib/variable-format-utils';
 import HtmlEmbedRenderer from '@/components/HtmlEmbedRenderer';
+import { headingAnchorSlug as sharedHeadingAnchorSlug } from '@/lib/heading-anchors';
 
 /**
  * Context for resolving rich text links - re-exports LinkResolutionContext for backwards compatibility
@@ -592,16 +593,8 @@ function extractBlockText(node: any): string {
  * (page-fetcher.ts tiptapHeadingSlug) and the static generator's slugify so
  * anchors are identical across SSR, hydration, and the migrated static site.
  */
-function headingAnchorSlug(text: string): string {
-  const base = text
-    .replace(/<[^>]+>/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .trim()
-    .replace(/[\s-]+/g, '-')
-    .slice(0, 60);
-  return base || 'section';
-}
+// Shared with the SSR renderer and the layer-heading pre-pass — see lib/heading-anchors.ts.
+const headingAnchorSlug = sharedHeadingAnchorSlug;
 
 function renderNestedRichTextContent(
   richTextValue: any,
