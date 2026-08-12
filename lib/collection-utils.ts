@@ -126,8 +126,24 @@ export function castValue(value: string | null, type: CollectionFieldType): any 
     case 'email':
     case 'phone':
     case 'text':
+      // A text field returns text. It used to be speculatively JSON.parsed whenever the content
+      // happened to start with `{` or `[`, which meant an author pasting JSON-LD into a text
+      // field got an OBJECT back — and every consumer that did the obvious thing with it
+      // (`String(value)`, template interpolation, string comparison) silently produced
+      // "[object Object]". That shipped structurally invalid schema on every page using the
+      // field, with nothing to see in the code (SCA-1283; SCA-1282 patched one consumer).
+      //
+      // The speculative parse is kept below for the types that genuinely STORE JSON —
+      // multi_reference, multiple-asset fields, computed status. Those have real parsed
+      // consumers. Prose does not, and the guess was only ever a guess: it cannot distinguish
+      // "this author stored a data structure" from "this sentence begins with a brace".
+      return value;
+
     default:
-      // Try to parse JSON for text fields that might contain JSON objects
+      // Types whose stored representation is genuinely JSON (multi_reference and multiple-asset
+      // fields store arrays; the computed `status` field stores an object). Their consumers —
+      // parseMultiReferenceValue, parseStatusValue — accept either form, so this stays a
+      // convenience rather than a contract.
       if (value.startsWith('{') || value.startsWith('[')) {
         try {
           return JSON.parse(value);

@@ -36,10 +36,45 @@ describe('CMS field → custom code interpolation', () => {
     assert.deepEqual(JSON.parse(roundTripped), FAQ_SCHEMA);   // valid schema in the served output
   });
 
-  test('the failure mode it replaces is exactly [object Object]', () => {
-    // Proves castValue really does hand us an object — i.e. the bug was upstream of display().
-    assert.equal(typeof castValue(JSON.stringify(FAQ_SCHEMA), 'text'), 'object');
-    assert.equal(String(castValue(JSON.stringify(FAQ_SCHEMA), 'text')), '[object Object]');
+  test('REGRESSION (SCA-1283): the ROOT CAUSE is fixed — a text field stays a string', () => {
+    // This test previously asserted the opposite, pinning the buggy read as a fact of life while
+    // SCA-1282 patched one consumer downstream. The speculative parse is gone at the source: a
+    // text field is text no matter what character it starts with, so no future consumer can
+    // inherit an object it never asked for.
+    const stored = JSON.stringify(FAQ_SCHEMA);
+    assert.equal(typeof castValue(stored, 'text'), 'string');
+    assert.equal(castValue(stored, 'text'), stored);
+    assert.notEqual(String(castValue(stored, 'text')), '[object Object]');
+  });
+
+  test('a text field that merely LOOKS like JSON is not silently rewritten', () => {
+    // The old guess could not tell a data structure from a sentence starting with a brace, and
+    // reformatted the author's content either way.
+    assert.equal(castValue('{not json at all', 'text'), '{not json at all');
+    assert.equal(castValue('{ "a":   1 }', 'text'), '{ "a":   1 }'); // spacing preserved verbatim
+    assert.equal(castValue('[draft] Pricing update', 'text'), '[draft] Pricing update');
+  });
+
+  test('email and phone get the same guarantee as text', () => {
+    assert.equal(castValue('{a}@example.com', 'email'), '{a}@example.com');
+    assert.equal(castValue('[+1] 555 0100', 'phone'), '[+1] 555 0100');
+  });
+
+  test('types that genuinely store JSON still parse — this fix must not reach them', () => {
+    // multi_reference and multiple-asset fields store arrays; computed `status` stores an object.
+    assert.deepEqual(castValue('["id-1","id-2"]', 'multi_reference'), ['id-1', 'id-2']);
+    assert.deepEqual(castValue('["asset-1"]', 'image'), ['asset-1']);
+    assert.deepEqual(
+      castValue('{"is_publishable":true,"is_published":false,"is_modified":false}', 'status'),
+      { is_publishable: true, is_published: false, is_modified: false },
+    );
+    assert.equal(castValue('single-asset-uuid', 'image'), 'single-asset-uuid');
+  });
+
+  test('display() still serializes an object — belt and suspenders, deliberately kept', () => {
+    // Nothing should hand it an object now, but SCA-1282's guard stays: it can only improve a
+    // call site, never break one, and "[object Object]" in served markup must stay unreachable.
+    assert.deepEqual(JSON.parse(display(FAQ_SCHEMA)), FAQ_SCHEMA);
   });
 
   test('works without the leading-newline mitigation in the stored data', () => {
