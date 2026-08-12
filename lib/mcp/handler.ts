@@ -3,6 +3,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { validateToken } from '@/lib/repositories/mcpTokenRepository';
 import { createMcpServer } from '@/lib/mcp/server';
+import { normalizeScopes, type McpScope } from '@/lib/mcp/scopes';
 import { getCachedToken, setCachedToken } from '@/lib/mcp/token-cache';
 
 /**
@@ -35,23 +36,30 @@ function cleanupStaleSessions() {
   }
 }
 
-export async function authenticateToken(token: string): Promise<boolean> {
+/**
+ * Validate a token and return its RECORD, not just yes/no.
+ *
+ * It previously returned a boolean and dropped the row on the floor, so the scopes and identity
+ * the row already carried could never reach the server — every token got every tool (SCA-1233).
+ */
+export async function authenticateToken(token: string): Promise<McpTokenRecord | null> {
   const cached = getCachedToken(token);
   if (cached) {
-    return cached.valid;
+    return cached.valid ? (cached.record as McpTokenRecord) : null;
   }
 
-  let valid = false;
+  let record: McpTokenRecord | null = null;
   try {
-    const result = await validateToken(token);
-    valid = result !== null;
+    record = (await validateToken(token)) as McpTokenRecord | null;
   } catch {
-    valid = false;
+    record = null;
   }
 
-  setCachedToken(token, valid);
-  return valid;
+  setCachedToken(token, record !== null, record);
+  return record;
 }
+
+export interface McpTokenRecord { id?: string; scopes?: unknown; user_id?: string | null }
 
 export function addCorsHeaders(response: Response): Response {
   const headers = new Headers(response.headers);
@@ -67,8 +75,8 @@ export function addCorsHeaders(response: Response): Response {
   });
 }
 
-function createSessionTransport() {
-  const server = createMcpServer();
+function createSessionTransport(scopes: McpScope[] | null) {
+  const server = createMcpServer(scopes);
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     enableJsonResponse: true,
@@ -151,7 +159,7 @@ function ensureAcceptHeader(request: Request): Request {
   });
 }
 
-async function handlePost(request: Request): Promise<Response> {
+async function handlePost(request: Request, scopes: McpScope[] | null): Promise<Response> {
   const normalized = ensureAcceptHeader(request);
   const sessionId = normalized.headers.get('mcp-session-id');
 
@@ -164,7 +172,7 @@ async function handlePost(request: Request): Promise<Response> {
   const body = await normalized.json();
   const isInit = !Array.isArray(body) && body.method === 'initialize';
 
-  const { server, transport } = createSessionTransport();
+  const { server, transport } = createSessionTransport(scopes);
   await server.connect(transport);
 
   if (isInit) {
@@ -189,10 +197,10 @@ async function handlePost(request: Request): Promise<Response> {
   return transport.handleRequest(actualReq, { parsedBody: body });
 }
 
-export async function handleMcpPost(request: Request): Promise<Response> {
+export async function handleMcpPost(request: Request, scopes: McpScope[] | null = null): Promise<Response> {
   cleanupStaleSessions();
   try {
-    const response = await handlePost(request);
+    const response = await handlePost(request, scopes);
     return addCorsHeaders(response);
   } catch (error) {
     console.error('[MCP POST] Error:', error);
@@ -207,7 +215,7 @@ export async function handleMcpPost(request: Request): Promise<Response> {
   }
 }
 
-export async function handleMcpGet(request: Request): Promise<Response> {
+export async function handleMcpGet(request: Request, scopes: McpScope[] | null = null): Promise<Response> {
   try {
     const sessionId = request.headers.get('mcp-session-id');
     if (!sessionId || !sessions.has(sessionId)) {
@@ -238,7 +246,7 @@ export async function handleMcpGet(request: Request): Promise<Response> {
   }
 }
 
-export async function handleMcpDelete(request: Request): Promise<Response> {
+export async function handleMcpDelete(request: Request, scopes: McpScope[] | null = null): Promise<Response> {
   try {
     const sessionId = request.headers.get('mcp-session-id');
     if (sessionId && sessions.has(sessionId)) {

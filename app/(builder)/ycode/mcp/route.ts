@@ -7,6 +7,7 @@ import {
   addCorsHeaders,
   buildWwwAuthenticateHeader,
 } from '@/lib/mcp/handler';
+import { normalizeScopes, type McpScope } from '@/lib/mcp/scopes';
 import { getBaseUrl } from '@/lib/oauth/metadata';
 
 export const dynamic = 'force-dynamic';
@@ -43,36 +44,39 @@ function unauthorizedWithChallenge(request: NextRequest, message: string): Respo
   return addCorsHeaders(response);
 }
 
-async function authorize(request: NextRequest): Promise<Response | null> {
+/** Returns a denial Response, or the token's scopes (null = unscoped legacy token = full access). */
+async function authorize(
+  request: NextRequest,
+): Promise<{ denied: Response } | { scopes: McpScope[] | null }> {
   const token = extractBearerToken(request);
   if (!token) {
-    return unauthorizedWithChallenge(request, 'Authorization required');
+    return { denied: unauthorizedWithChallenge(request, 'Authorization required') };
   }
 
-  const valid = await authenticateToken(token);
-  if (!valid) {
-    return unauthorizedWithChallenge(request, 'Invalid or expired access token');
+  const record = await authenticateToken(token);
+  if (!record) {
+    return { denied: unauthorizedWithChallenge(request, 'Invalid or expired access token') };
   }
 
-  return null;
+  return { scopes: normalizeScopes(record.scopes) };
 }
 
 export async function POST(request: NextRequest) {
-  const denied = await authorize(request);
-  if (denied) return denied;
-  return handleMcpPost(request);
+  const auth = await authorize(request);
+  if ('denied' in auth) return auth.denied;
+  return handleMcpPost(request, auth.scopes);
 }
 
 export async function GET(request: NextRequest) {
-  const denied = await authorize(request);
-  if (denied) return denied;
-  return handleMcpGet(request);
+  const auth = await authorize(request);
+  if ('denied' in auth) return auth.denied;
+  return handleMcpGet(request, auth.scopes);
 }
 
 export async function DELETE(request: NextRequest) {
-  const denied = await authorize(request);
-  if (denied) return denied;
-  return handleMcpDelete(request);
+  const auth = await authorize(request);
+  if ('denied' in auth) return auth.denied;
+  return handleMcpDelete(request, auth.scopes);
 }
 
 export async function OPTIONS() {

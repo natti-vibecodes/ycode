@@ -7,6 +7,7 @@ import {
   addCorsHeaders,
   unauthorizedJson,
 } from '@/lib/mcp/handler';
+import { normalizeScopes } from '@/lib/mcp/scopes';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -25,10 +26,13 @@ export async function POST(
   { params }: { params: Promise<{ token: string }> },
 ) {
   const { token } = await params;
-  if (!(await authenticateToken(token))) {
+  const record = await authenticateToken(token);
+  if (!record) {
     return unauthorizedJson('Invalid MCP token');
   }
-  return handleMcpPost(request);
+  // The token's scopes decide which tool groups this session even sees (SCA-1233).
+  // NULL scopes means an unscoped legacy token: full access, unchanged.
+  return handleMcpPost(request, normalizeScopes(record.scopes));
 }
 
 export async function GET(
@@ -36,10 +40,13 @@ export async function GET(
   { params }: { params: Promise<{ token: string }> },
 ) {
   const { token } = await params;
-  if (!(await authenticateToken(token))) {
+  const record = await authenticateToken(token);
+  if (!record) {
     return unauthorizedJson('Invalid MCP token');
   }
-  return handleMcpGet(request);
+  // The token's scopes decide which tool groups this session even sees (SCA-1233).
+  // NULL scopes means an unscoped legacy token: full access, unchanged.
+  return handleMcpGet(request, normalizeScopes(record.scopes));
 }
 
 export async function DELETE(
@@ -47,10 +54,13 @@ export async function DELETE(
   { params }: { params: Promise<{ token: string }> },
 ) {
   const { token } = await params;
-  if (!(await authenticateToken(token))) {
+  const record = await authenticateToken(token);
+  if (!record) {
     return unauthorizedJson('Invalid MCP token');
   }
-  return handleMcpDelete(request);
+  // The token's scopes decide which tool groups this session even sees (SCA-1233).
+  // NULL scopes means an unscoped legacy token: full access, unchanged.
+  return handleMcpDelete(request, normalizeScopes(record.scopes));
 }
 
 export async function OPTIONS() {

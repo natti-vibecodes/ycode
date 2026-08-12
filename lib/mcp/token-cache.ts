@@ -12,14 +12,21 @@
  * stops working immediately, not after the cache TTL expires.
  */
 
-interface TokenCacheEntry {
+export interface TokenCacheEntry {
   valid: boolean;
+  /** The validated token row — carries scopes and identity. Null when invalid. */
+  record: unknown | null;
   expires: number;
 }
 
 const cache = new Map<string, TokenCacheEntry>();
 
-export const TOKEN_CACHE_TTL_VALID_MS = 60_000;
+// 60s was chosen when this cached a yes/no. It now caches SCOPES too, so the same window also
+// delays a re-scoping — and, more importantly, a revoked token kept working for up to a minute.
+// A token is a credential; a minute of post-revocation access is the wrong trade for saving a
+// round trip. Cutting to 10s keeps the hot-path benefit (agents make many calls per minute)
+// while bounding the blast radius of a revoke or a scope change (SCA-1233).
+export const TOKEN_CACHE_TTL_VALID_MS = 10_000;
 export const TOKEN_CACHE_TTL_INVALID_MS = 5_000;
 
 export function getCachedToken(token: string): TokenCacheEntry | undefined {
@@ -33,9 +40,9 @@ export function getCachedToken(token: string): TokenCacheEntry | undefined {
   return undefined;
 }
 
-export function setCachedToken(token: string, valid: boolean): void {
+export function setCachedToken(token: string, valid: boolean, record: unknown | null = null): void {
   const ttl = valid ? TOKEN_CACHE_TTL_VALID_MS : TOKEN_CACHE_TTL_INVALID_MS;
-  cache.set(token, { valid, expires: Date.now() + ttl });
+  cache.set(token, { valid, record, expires: Date.now() + ttl });
 }
 
 export function invalidateToken(token: string): void {

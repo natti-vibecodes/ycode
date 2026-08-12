@@ -115,7 +115,7 @@ export async function validateToken(token: string): Promise<McpToken | null> {
 
   const { data, error } = await client
     .from('mcp_tokens')
-    .select('id, name, token_prefix, is_active, last_used_at, created_at, updated_at, oauth_client_id, expires_at, user_id')
+    .select('id, name, token_prefix, is_active, last_used_at, created_at, updated_at, oauth_client_id, expires_at, user_id, scopes')
     .eq('token', token)
     .eq('is_active', true)
     .single();
