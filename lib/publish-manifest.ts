@@ -33,7 +33,12 @@ export interface ManifestInput {
   /** Entities the publish queue reports as pending. */
   queued: { pages: { id: string; name: string }[]; components: { id: string; name: string }[] };
   components: DivergenceComponent[];
-  pages: (DivergencePage & { slug?: string; folder?: string | null; isPublishable?: boolean })[];
+  /**
+   * `url` is the authoritative served path when the caller can build one (`buildSlugPath` knows
+   * about index pages, nested folders and dynamic slugs; the `pageUrl` fallback here does not).
+   * `isPublishable === false` means the page does not go live at all — see ManifestEntry.
+   */
+  pages: (DivergencePage & { slug?: string; folder?: string | null; url?: string; isPublishable?: boolean })[];
   /** Component ids whose page-local copies are intentional (policy, not drift). */
   acceptedDivergence?: string[];
   /** Fork commit the running server was started from, and the working tree's HEAD. */
@@ -47,6 +52,11 @@ export interface ManifestEntry {
   url: string;
   /** Why this page is affected — queued directly, or reached by a queued component. */
   reasons: string[];
+  /**
+   * False when `is_publishable` is off: the edit publishes, and the page still serves nothing.
+   * Only an explicit false counts — an unknown flag is not evidence of a problem.
+   */
+  publishable: boolean;
 }
 
 export interface PublishManifest {
@@ -85,7 +95,13 @@ export function buildPublishManifest(input: ManifestInput): PublishManifest {
   const add = (page: ManifestInput['pages'][number], reason: string) => {
     const existing = byPage.get(page.id);
     if (existing) { if (!existing.reasons.includes(reason)) existing.reasons.push(reason); return; }
-    byPage.set(page.id, { pageId: page.id, pageName: page.name, url: pageUrl(page), reasons: [reason] });
+    byPage.set(page.id, {
+      pageId: page.id,
+      pageName: page.name,
+      url: page.url ?? pageUrl(page),
+      reasons: [reason],
+      publishable: page.isPublishable !== false,
+    });
   };
 
   const queuedPageIds = new Set(input.queued.pages.map((p) => p.id));
@@ -112,7 +128,9 @@ export function buildPublishManifest(input: ManifestInput): PublishManifest {
       accepted: accepted.has(d.componentId),
     }));
 
-  const verify = [...byPage.values()].map((e) => ({
+  // Non-publishable pages get no verification target: they serve a 404 either way, so listing
+  // them would hand back a check that fails for a reason unrelated to the change.
+  const verify = [...byPage.values()].filter((e) => e.publishable).map((e) => ({
     url: e.url,
     expect: 'the change you made — fetch this URL and grep for a marker that is PRESENT when the fix is in',
   }));
@@ -122,9 +140,11 @@ export function buildPublishManifest(input: ManifestInput): PublishManifest {
   const stale = Boolean(boot && head && boot !== head);
 
   const unexpected = willNotReach.filter((w) => !w.accepted);
+  const unpublishable = [...byPage.values()].filter((e) => !e.publishable);
   const summary = [
     `${byPage.size} page(s) will serve this publish.`,
     unexpected.length ? `⚠️ ${unexpected.length} page(s) hold their own copy and will NOT get it.` : '',
+    unpublishable.length ? `⚠️ ${unpublishable.length} page(s) are affected but not publishable — the edit ships and the page still serves nothing.` : '',
     stale ? `⚠️ Running server was started from ${boot?.slice(0, 7)}, HEAD is ${head?.slice(0, 7)} — restart to be sure what is running.` : '',
   ].filter(Boolean).join(' ');
 

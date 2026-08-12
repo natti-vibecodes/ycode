@@ -99,6 +99,35 @@ describe('buildPublishManifest (SCA-1272)', () => {
     assert.deepEqual(m.verify.map((v) => v.url).sort(), ['/', '/services/design-branding']);
   });
 
+  test('a caller-supplied url wins over the fallback builder', () => {
+    // buildSlugPath knows about index pages, nested folders and dynamic slugs. pageUrl does not,
+    // so when the caller has the real path it must not be second-guessed.
+    const m = buildPublishManifest({
+      ...queuedComponent,
+      pages: PAGES.map((p) => (p.id === 'p-db' ? { ...p, url: '/en/services/design-branding' } : p)),
+    });
+    assert.equal(m.willShip.find((e) => e.pageId === 'p-db')?.url, '/en/services/design-branding');
+  });
+
+  test('REGRESSION: an affected page that is not publishable is flagged, not counted as shipped', () => {
+    // "Published successfully" plus a page that serves a 404 is the same lie in a new costume.
+    const m = buildPublishManifest({
+      ...queuedComponent,
+      pages: PAGES.map((p) => (p.id === 'p-db' ? { ...p, isPublishable: false } : p)),
+    });
+    assert.equal(m.willShip.find((e) => e.pageId === 'p-db')?.publishable, false);
+    assert.equal(m.willShip.find((e) => e.pageId === 'p-home')?.publishable, true);
+    assert.match(m.summary, /not publishable/);
+    // No verification target: it would fail for a reason that has nothing to do with the change.
+    assert.deepEqual(m.verify.map((v) => v.url), ['/']);
+  });
+
+  test('an unknown publishable flag is not treated as a defect', () => {
+    const m = buildPublishManifest(queuedComponent); // fixtures carry no isPublishable
+    assert.ok(m.willShip.every((e) => e.publishable));
+    assert.doesNotMatch(m.summary, /not publishable/);
+  });
+
   test('nothing queued produces an empty, honest manifest', () => {
     const m = buildPublishManifest({ queued: { pages: [], components: [] }, components: [NEWSLETTER], pages: PAGES });
     assert.deepEqual(m.willShip, []);

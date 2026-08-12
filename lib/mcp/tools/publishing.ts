@@ -1,7 +1,8 @@
+import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getUnpublishedPages, getAllDraftPages } from '@/lib/repositories/pageRepository';
 import { getUnpublishedLayerStyles, publishLayerStyles } from '@/lib/repositories/layerStyleRepository';
-import { getUnpublishedComponents, publishComponents } from '@/lib/repositories/componentRepository';
+import { getAllComponents, getUnpublishedComponents, publishComponents } from '@/lib/repositories/componentRepository';
 import { getAllCollections, getUnpublishedCollections } from '@/lib/repositories/collectionRepository';
 import { getItemsByCollectionId } from '@/lib/repositories/collectionItemRepository';
 import { getUnpublishedAssets, publishAssets, hardDeleteSoftDeletedAssets } from '@/lib/repositories/assetRepository';
@@ -18,6 +19,12 @@ import { publishCSS, savePublishedAt } from '@/lib/services/settingsService';
 import { generateAndSaveDraftCSS } from '@/lib/server/cssGenerator';
 import { clearAllCache } from '@/lib/services/cacheService';
 import { isPublishAllowed, publishBlockedMessage } from '@/lib/publish-guard';
+import { getAllDraftLayers } from '@/lib/repositories/pageLayersRepository';
+import { getAllDraftPageFolders } from '@/lib/repositories/pageFolderRepository';
+import { buildSlugPath } from '@/lib/page-utils';
+import { buildPublishManifest } from '@/lib/publish-manifest';
+import { BOOT_COMMIT, readHeadCommit } from '@/lib/boot-commit';
+import type { Layer, Page } from '@/types';
 
 /** Count draft locales not yet present in the published set (new languages awaiting publish). */
 async function countUnpublishedLocales(): Promise<number> {
@@ -69,6 +76,52 @@ export function registerPublishingTools(server: McpServer) {
             unpublished_global_variables: globals.map((g) => ({ id: g.id, name: g.name })),
           }, null, 2),
         }],
+      };
+    },
+  );
+
+  server.tool(
+    'get_publish_manifest',
+    'Pre-publish gate: which URLs will ACTUALLY serve this publish, which pages a queued component will NOT reach (they hold their own copy), the list of URLs to re-fetch afterwards, and whether the running server predates the working tree. Read-only. Answers "where does this land?", which get_unpublished_changes does not (SCA-1272).',
+    {
+      accepted_divergence: z.array(z.string()).optional().describe(
+        'Component ids whose page-local copies are deliberate (e.g. page-local Collection Lists with per-page filters). Listed as accepted rather than reported as breakage.',
+      ),
+    },
+    async ({ accepted_divergence }) => {
+      const [queuedPages, queuedComponents, allPages, allComponents, allLayers, folders] = await Promise.all([
+        getUnpublishedPages().catch(() => [] as Page[]),
+        getUnpublishedComponents().catch(() => [] as { id: string; name: string }[]),
+        getAllDraftPages().catch(() => [] as Page[]),
+        getAllComponents(false).catch(() => [] as { id: string; name: string; layers: Layer[] }[]),
+        getAllDraftLayers().catch(() => [] as { page_id: string; layers: Layer[] }[]),
+        getAllDraftPageFolders().catch(() => []),
+      ]);
+
+      const layersByPage = new Map(allLayers.map((row) => [row.page_id, row.layers ?? []]));
+
+      const manifest = buildPublishManifest({
+        queued: {
+          pages: queuedPages.map((p) => ({ id: p.id, name: p.name })),
+          components: queuedComponents.map((c) => ({ id: c.id, name: c.name })),
+        },
+        components: allComponents.map((c) => ({ id: c.id, name: c.name, layers: c.layers ?? [] })),
+        pages: allPages.map((p) => ({
+          id: p.id,
+          name: p.name,
+          layers: layersByPage.get(p.id) ?? [],
+          // buildSlugPath is the site's own resolver — index pages, nested folders and dynamic
+          // slugs all get their real served path, not a guess assembled from the slug.
+          url: buildSlugPath(p, folders, 'page'),
+          isPublishable: p.is_publishable,
+        })),
+        acceptedDivergence: accepted_divergence,
+        bootCommit: BOOT_COMMIT,
+        headCommit: readHeadCommit(),
+      });
+
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(manifest, null, 2) }],
       };
     },
   );
