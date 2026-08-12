@@ -159,14 +159,32 @@ export default function CustomCodeInjector({ html }: CustomCodeInjectorProps) {
       // Dispatching afterwards is the belt to the shim's braces and covers every registration
       // path. Handlers the shim already invoked were removed from the listener list at that
       // point, so this does not double-fire them.
-      for (const type of ALREADY_FIRED_EVENTS) {
-        try {
-          document.dispatchEvent(new Event(type));
-          if (type === 'load') window.dispatchEvent(new Event(type));
-        } catch (error) {
-          console.error(`Custom code ${type} replay failed:`, error);
+      //
+      // But WAIT until the document is genuinely finished first (SCA-1312). Next listens for
+      // DOMContentLoaded on `document`, and its handler closes the RSC Flight stream and sets
+      // `initialServerDataBuffer = undefined` (next/dist/esm/client/app-index.js). Fire this
+      // mid-stream and every remaining `__next_f.push([1,…])` throws E18, "Unexpected server
+      // data: missing bootstrap script" — ~17 per load on /contact, which lost that race
+      // consistently while other pages happened to win it. Whether a page broke came down to
+      // payload size and network timing.
+      //
+      // At `readyState === 'complete'` the real lifecycle is over: Next's own handler has run,
+      // the buffer is already cleared, and no further chunks are coming — so the replay can no
+      // longer disturb anything, while custom code still gets the events it waits on.
+      const replayFiredEvents = () => {
+        if (cancelled) return; // unmounted while we waited for `load`
+        for (const type of ALREADY_FIRED_EVENTS) {
+          try {
+            document.dispatchEvent(new Event(type));
+            if (type === 'load') window.dispatchEvent(new Event(type));
+          } catch (error) {
+            console.error(`Custom code ${type} replay failed:`, error);
+          }
         }
-      }
+      };
+
+      if (document.readyState === 'complete') replayFiredEvents();
+      else window.addEventListener('load', replayFiredEvents, { once: true });
     });
 
     return () => { cancelled = true; restoreShim(); };
