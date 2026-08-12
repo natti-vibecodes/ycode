@@ -1,4 +1,5 @@
 import React from 'react';
+import { INERT_TYPE, ORIGINAL_TYPE_ATTR, isExecutableScriptType } from '@/lib/deferred-scripts';
 
 /**
  * Maps lowercase HTML attribute names to their React/JSX camelCase equivalents.
@@ -118,6 +119,19 @@ export function renderRootLayoutHeadCode(html: string, prefix = 'global-head'): 
         suppressHydrationWarning: true,
         ...reactAttrs,
       };
+
+      // An EXECUTABLE script cannot survive a client render: React substitutes a <div> for it
+      // and warns (see lib/deferred-scripts.ts for the exact rule it applies). Park it with the
+      // inert marker instead — the parser skips it, React treats it as a data block and leaves
+      // it alone, and HeadScriptActivator clones it into a live script after hydration.
+      //
+      // Data scripts — `application/ld+json` above all — are deliberately untouched: React
+      // already renders them correctly, and they must stay in the served HTML for crawlers.
+      if (isExecutableScriptType(attrs.type)) {
+        if (attrs.type) props[ORIGINAL_TYPE_ATTR] = attrs.type;
+        props.type = INERT_TYPE;
+      }
+
       if (inner) {
         props.dangerouslySetInnerHTML = { __html: inner };
       }

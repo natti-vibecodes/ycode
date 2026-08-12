@@ -1,6 +1,7 @@
 import React from 'react';
 import type { Metadata } from 'next';
 import DarkModeProvider from '@/components/DarkModeProvider';
+import HeadScriptActivator from '@/components/HeadScriptActivator';
 
 export const defaultMetadata: Metadata = {
   title: 'Ycode - Visual Website Builder',
@@ -56,6 +57,10 @@ export default function RootLayoutShell({
         <DarkModeProvider>
           {children}
         </DarkModeProvider>
+        {/* Switches on the head custom code's parked scripts. Mounted at the ROOT on purpose:
+            effects run children-first, so by the time this fires, page-level head code from
+            PageRenderer is in the DOM too and one activator covers both (SCA-1297). */}
+        <HeadScriptActivator />
       </body>
     </html>
   );
