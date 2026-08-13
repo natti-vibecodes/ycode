@@ -45,7 +45,8 @@
     "review:start": "NEXT_DIST_DIR=.next-review PUBLISH_ALLOWED= next start -p 3003",
     "review:rebuild": "bash scripts/review-rebuild.sh",
     "review:build:unsafe-inplace": "rm -rf .next-review/cache && NEXT_DIST_DIR=.next-review next build",
-    "dev:recover": "bash scripts/dev-recover.sh"
+    "dev:recover": "bash scripts/dev-recover.sh",
+    "review:watch": "python3 scripts/review-watch.py"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",
