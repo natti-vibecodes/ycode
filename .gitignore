@@ -74,4 +74,4 @@ release.sh
 # No credentials in the file itself, but it is machine-specific and has no
 # business in a fork of upstream.
 setup-env.sh
-.next-review
+.next-review*
