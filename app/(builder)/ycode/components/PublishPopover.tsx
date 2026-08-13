@@ -7,9 +7,10 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Spinner } from '@/components/ui/spinner';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import Icon from '@/components/ui/icon';
 import { useSettingsStore } from '@/stores/useSettingsStore';
-import { publishApi } from '@/lib/api';
+import { cacheApi, publishApi } from '@/lib/api';
 import { formatRelativeTime } from '@/lib/utils';
 import { toast } from 'sonner';
 
@@ -60,6 +61,9 @@ export default function PublishPopover({
   const [publishSuccess, setPublishSuccess] = useState(false);
   const [isReverting, setIsReverting] = useState(false);
   const [isRevertDialogOpen, setIsRevertDialogOpen] = useState(false);
+  const [isClearingCache, setIsClearingCache] = useState(false);
+  const [clearCacheSuccess, setClearCacheSuccess] = useState(false);
+  const [isClearCacheDialogOpen, setIsClearCacheDialogOpen] = useState(false);
 
   const { getSettingByKey, updateSetting } = useSettingsStore();
   const publishedAt = getSettingByKey('published_at');
@@ -119,6 +123,29 @@ export default function PublishPopover({
     }
   }, [baseUrl, publishedUrl, onPublishSuccess, setIsPublishing, updateSetting]);
 
+  const handleClearCache = useCallback(async () => {
+    try {
+      setIsClearingCache(true);
+
+      const result = await cacheApi.clearAll();
+
+      if (result.error) {
+        throw new Error(result.error);
+      }
+
+      toast.success('Cache cleared successfully');
+
+      setClearCacheSuccess(true);
+      setTimeout(() => setClearCacheSuccess(false), 3000);
+      setIsClearCacheDialogOpen(false);
+    } catch (error) {
+      console.error('Failed to clear cache:', error);
+      toast.error('Failed to clear cache');
+    } finally {
+      setIsClearingCache(false);
+    }
+  }, []);
+
   const handleRevertConfirm = useCallback(async () => {
     try {
       setIsReverting(true);
@@ -166,20 +193,45 @@ export default function PublishPopover({
 
         <hr className="my-3" />
 
-        <Button
-          size="sm"
-          className="w-full"
-          onClick={handlePublishAll}
-          disabled={isPublishing || publishSuccess}
-        >
-          {isPublishing ? (
-            <Spinner />
-          ) : publishSuccess ? (
-            <Icon name="check" />
-          ) : (
-            publishedAt ? 'Update' : 'Publish'
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            className="flex-1"
+            onClick={handlePublishAll}
+            disabled={isPublishing || publishSuccess}
+          >
+            {isPublishing ? (
+              <Spinner />
+            ) : publishSuccess ? (
+              <Icon name="check" />
+            ) : (
+              publishedAt ? 'Update' : 'Publish'
+            )}
+          </Button>
+
+          {publishedAt && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setIsClearCacheDialogOpen(true)}
+                  disabled={isClearingCache || clearCacheSuccess}
+                  aria-label="Clear cache"
+                >
+                  {isClearingCache ? (
+                    <Spinner />
+                  ) : clearCacheSuccess ? (
+                    <Icon name="check" />
+                  ) : (
+                    <Icon name="refresh" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Clear cache</TooltipContent>
+            </Tooltip>
           )}
-        </Button>
+        </div>
 
         <hr className="my-3" />
 
@@ -273,6 +325,53 @@ export default function PublishPopover({
             disabled={isReverting}
           >
             {isReverting ? <><Spinner /> Reverting...</> : 'Revert'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <Dialog
+      open={isClearCacheDialogOpen}
+      onOpenChange={(open) => { if (!isClearingCache) setIsClearCacheDialogOpen(open); }}
+    >
+      <DialogContent
+        showCloseButton={false}
+        onPointerDownOutside={(e) => { if (isClearingCache) e.preventDefault(); }}
+        onEscapeKeyDown={(e) => { if (isClearingCache) e.preventDefault(); }}
+      >
+        <DialogHeader>
+          <DialogTitle>Clear cache for all pages</DialogTitle>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-2">
+          <DialogDescription>
+            Published pages are cached so they load quickly for your visitors.
+            You normally don&apos;t need to clear the cache, publishing already
+            refreshes the pages that changed.
+          </DialogDescription>
+          <DialogDescription>
+            This action would immediately clear the cache of all pages, which is
+            only useful for websites with many pages. Once cleared, the first
+            visit to each page will be slower as it has to be cached again, after
+            which every following visit loads quickly.
+          </DialogDescription>
+        </div>
+
+        <DialogFooter>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsClearCacheDialogOpen(false)}
+            disabled={isClearingCache}
+          >
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            onClick={handleClearCache}
+            disabled={isClearingCache}
+          >
+            {isClearingCache ? <><Spinner /> Clearing...</> : 'Clear cache'}
           </Button>
         </DialogFooter>
       </DialogContent>
