@@ -34,6 +34,7 @@ import { buildPageHreflangAlternatesForPage } from '@/lib/generate-page-metadata
 import { getSiteBaseUrl } from '@/lib/url-utils';
 import type { HreflangAlternate } from '@/lib/hreflang-utils';
 import type { Layer, BackgroundsDesign, Component, Page, CollectionItemWithValues, CollectionField, Locale, PageFolder, PasswordProtectionContext, Translation } from '@/types';
+import { findSlugField } from '@/lib/collection-field-utils';
 
 interface PageLinkRef { collection_item_id: string; page_id: string }
 
@@ -424,7 +425,7 @@ export default async function PageRenderer({
 
   // Add current page's collection item if available
   if (collectionItem && collectionFields) {
-    const slugField = collectionFields.find(f => f.key === 'slug');
+    const slugField = findSlugField(collectionFields);
     if (slugField && collectionItem.values[slugField.id]) {
       collectionItemSlugs[collectionItem.id] = collectionItem.values[slugField.id];
     }
@@ -544,7 +545,7 @@ export default async function PageRenderer({
       // Dynamic pages need the translated CMS item slug per locale
       let dynamicSlug: LocalizedDynamicSlug | null = null;
       if (page.is_dynamic && collectionItem) {
-        const slugField = collectionFields.find(f => f.key === 'slug');
+        const slugField = findSlugField(collectionFields);
         if (slugField) {
           // collectionItem.values are already translated for the current locale,
           // so fetch the raw (default-locale) slug to use as the default + fallback.

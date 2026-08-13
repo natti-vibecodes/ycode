@@ -1178,3 +1178,22 @@ export function buildFieldGroupsForLayer(
     globals,
   });
 }
+
+/**
+ * Find a collection's slug field (SCA-1341).
+ *
+ * Every call site used to test `field.key === 'slug'`. In this workspace **no field has a key at
+ * all** — 36 fields on Case Studies, 70 on Insights, every one null — so that test found nothing
+ * and the slug silently resolved to undefined. On /insights that produced 116 article cards with
+ * no href: the binding was correct, the item state was correct, and the page rendered a full grid
+ * of dead links with nothing in any log to say so.
+ *
+ * Matches `key` OR `name`, case-insensitively, and returns null rather than guessing at some
+ * other text field — a wrong slug builds a URL that 404s, which is worse than no link.
+ */
+export function findSlugField(fields: CollectionField[] | null | undefined): CollectionField | null {
+  if (!fields?.length) return null;
+  return fields.find((f) => f.key?.toLowerCase().trim() === 'slug')
+    ?? fields.find((f) => f.name?.toLowerCase().trim() === 'slug')
+    ?? null;
+}

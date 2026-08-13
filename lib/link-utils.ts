@@ -594,6 +594,18 @@ export function generateLinkHref(
             // resolved (empty/missing reference, deleted target, or out-of-bounds
             // next/previous). Emit no href instead of the literal `{slug}` pattern
             // so the element renders without a broken link.
+            //
+            // But SAY SO. Swallowing this silently shipped 116 article cards on /insights with
+            // no href at all — binding correct, items correct, every signal green, an entire
+            // page of dead links that no check could see (SCA-1341). A resolver that hides its
+            // own failure is indistinguishable from one that succeeded.
+            if (!itemSlug) {
+              console.warn(
+                `[link] no slug for the requested collection item `
+                + `on dynamic page "${page?.slug ?? '?'}" — rendering without href. `
+                + 'Usually the collection has no field named "slug".',
+              );
+            }
             href = itemSlug
               ? buildLocalizedDynamicPageUrl(page, folders, itemSlug, locale, translations || undefined)
               : '';

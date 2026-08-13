@@ -50,6 +50,7 @@ import { isVirtualAssetField, findDisplayField, hasDynamicDateRule, isDynamicDat
 import { getDefaultFormatId, isFormatValidForFieldType } from '@/lib/variable-format-utils';
 import type { DynamicVisibilityCondition, FieldVariable, AssetVariable, DynamicTextVariable, DynamicRichTextVariable, LinkSettings } from '@/types';
 import type { DesignColorVariable } from '@/types';
+import { findSlugField } from '@/lib/collection-field-utils';
 
 // Cached map provider tokens for synchronous use inside layerToHtml.
 // Set by ensureMapTokens() before HTML generation begins.
@@ -779,7 +780,7 @@ async function fetchPageByPathInternal(
             let pageCollectionSortedItemIds: string[] | undefined;
             let pageCollectionSortedItemSlugs: Record<string, string> | undefined;
             try {
-              const slugFieldId = collectionFields.find(f => f.key === 'slug')?.id;
+              const slugFieldId = findSlugField(collectionFields)?.id;
               const { items: fetchedItems } = await getItemsWithValues(
                 cmsSettings.collection_id,
                 isPublished
@@ -2304,7 +2305,7 @@ async function buildCollectionCache(
   // Slug fields are always needed for URL building
   const slugFieldIds: string[] = [];
   for (const [, fields] of fieldsByCollection) {
-    const slug = fields.find(f => f.key === 'slug');
+    const slug = findSlugField(fields);
     if (slug) slugFieldIds.push(slug.id);
   }
 
@@ -2831,7 +2832,7 @@ export async function resolveCollectionLayers(
           }
 
           // Find slug field for building collection item URLs
-          const slugField = collectionFields.find(f => f.key === 'slug');
+          const slugField = findSlugField(collectionFields);
 
           // Pre-process all items: translations + date formatting (pure computation)
           await ensureCmsTranslations(translations, sortedItems.map(item => item.id));
@@ -3901,7 +3902,7 @@ export async function renderCollectionItemsToHtml(
       // IDs aren't pre-remapped (see clonedTemplate above), so the whole
       // subtree gets a single remap pass here.
       if (collectionLayer) {
-        const slugField = collectionFields.find(f => f.key === 'slug');
+        const slugField = findSlugField(collectionFields);
         const itemSlug = slugField ? (rawValues[slugField.id] || item.values[slugField.id]) : undefined;
 
         const clonedLayer: Layer = {

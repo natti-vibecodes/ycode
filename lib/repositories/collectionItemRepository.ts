@@ -9,6 +9,7 @@ import { generateCollectionItemContentHash } from '@/lib/hash-utils';
 import { castValue } from '../collection-utils';
 import { findStatusFieldId, buildStatusValue } from '@/lib/collection-field-utils';
 import { chunk } from '@/lib/utils';
+import { findSlugField } from '@/lib/collection-field-utils';
 
 /**
  * Collection Item Repository
@@ -787,7 +788,7 @@ export async function getSlugsByItemIds(
   const slugs: Record<string, string> = {};
   for (const item of itemList) {
     const fields = fieldsByCollection.get(item.collection_id);
-    const slugField = fields?.find(f => f.key === 'slug');
+    const slugField = findSlugField(fields);
     const slugValue = slugField ? item.values[slugField.id] : undefined;
     if (slugValue) {
       slugs[item.id] = slugValue;
@@ -1161,7 +1162,7 @@ export async function duplicateItem(itemId: string, isPublished: boolean = false
   const fields = await getFieldsByCollectionId(originalItem.collection_id, isPublished);
   const idField = fields.find(f => f.key === 'id');
   const nameField = fields.find(f => f.key === 'name');
-  const slugField = fields.find(f => f.key === 'slug');
+  const slugField = findSlugField(fields);
   const createdAtField = fields.find(f => f.key === 'created_at');
   const updatedAtField = fields.find(f => f.key === 'updated_at');
 
