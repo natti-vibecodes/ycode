@@ -11,6 +11,7 @@ import type { Layer, Locale, ComponentVariable, FormSettings, LinkSettings, Brea
 import type { UseLiveLayerUpdatesReturn } from '@/hooks/use-live-layer-updates';
 import type { UseLiveComponentUpdatesReturn } from '@/hooks/use-live-component-updates';
 import { getLayerHtmlTag, getClassesString, getText, resolveFieldValue, isTextEditable, isTextContentLayer, isRichTextLayer, getCollectionVariable, evaluateVisibility, findAncestorByName, filterDisabledSliderLayers, getLayerCmsFieldBinding, findLayerById, applyCustomAttributes, containsLayerId } from '@/lib/layer-utils';
+import { isLayerEmpty } from '@/lib/layer-emptiness';
 import { getMapIframeProps, DEFAULT_MAP_SETTINGS, resolveMarkerColor } from '@/lib/map-utils';
 import { HTML_TO_REACT_ATTRS } from '@/lib/parse-head-html';
 import { SWIPER_CLASS_MAP, SWIPER_DATA_ATTR_MAP } from '@/lib/slider-constants';
@@ -2145,7 +2146,8 @@ const LayerItemImpl: React.FC<{
     const mergedStyle = { ...style, ...parsedAttrStyle, ...filteredDesignStyles, ...bgImageStyle };
 
     // Check if element is truly empty (no text, no children)
-    const isEmpty = !textContent && (!children || children.length === 0);
+    // SCA-1368: shared with the public renderer so the two predicates cannot drift.
+    const isEmpty = isLayerEmpty(layer, textContent, children as unknown[] | undefined, htmlTag);
 
     // Layers with a visible border or background shouldn't show the empty placeholder (canvas only)
     const hasVisualStyle = isEditMode && isEmpty && (

@@ -19,6 +19,7 @@ import type { Layer, Locale, FormSettings, Component, DesignColorVariable, Passw
 import { getLayerHtmlTag, getClassesString, getText, resolveFieldValue, isTextContentLayer, getCollectionVariable, filterDisabledSliderLayers, applyCustomAttributes, resolveLayerAttribute } from '@/lib/layer-utils';
 import { getMapIframeProps, DEFAULT_MAP_SETTINGS, resolveMarkerColor } from '@/lib/map-utils';
 import { HTML_TO_REACT_ATTRS } from '@/lib/parse-head-html';
+import { isLayerEmpty } from '@/lib/layer-emptiness';
 import { FORM_SUCCESS_EVENT, FORM_ERROR_EVENT, buildFormEventDetail, dispatchFormEvent } from '@/lib/form-events';
 import { SWIPER_CLASS_MAP, SWIPER_DATA_ATTR_MAP } from '@/lib/slider-constants';
 import { getSliderPresizeVars } from '@/lib/slider-utils';
@@ -895,7 +896,9 @@ const LayerItem: React.FC<{
 
     const mergedStyle = { ...parsedAttrStyle, ...filteredDesignStyles, ...bgImageStyle };
 
-    const isEmpty = !textContent && (!children || children.length === 0);
+    // SCA-1368: an element that IS its own content (an <img> with a src, a <video>, an
+    // <input>) is not empty just because it has no children. See lib/layer-emptiness.ts.
+    const isEmpty = isLayerEmpty(layer, textContent, children as unknown[] | undefined, htmlTag);
 
     const combinedRef = (node: HTMLElement | null) => {
       if (isFilterLayer) {
