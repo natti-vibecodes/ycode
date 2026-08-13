@@ -2518,7 +2518,8 @@ const LayerItemImpl: React.FC<{
       const explicitSizes = (layer.attributes?.sizes as string | undefined)?.trim();
       const intrinsicWidth = parseImageDimension(imgWidth);
       const intrinsicHeight = parseImageDimension(imgHeight);
-      const sizes = explicitSizes || buildImageSizes(intrinsicWidth);
+      // `sizes=auto` only applies to lazy images, so pass whether this one is lazy.
+      const sizes = explicitSizes || buildImageSizes(intrinsicWidth, effectiveLoading === 'lazy');
 
       // Pass intrinsic width so srcset descriptors don't exceed the source's
       // natural size (the proxy won't upscale; mismatched descriptors break

@@ -597,11 +597,25 @@ export function parseImageDimension(value: string | number | undefined | null): 
 }
 
 /**
- * Build a responsive `sizes` attribute. With a known intrinsic width, browsers
- * pick a smaller srcset variant on desktop; without it, fall back to 100vw.
+ * Build a responsive `sizes` attribute.
+ *
+ * The intrinsic width is the SOURCE FILE's width, not the width the image is displayed at, and
+ * `sizes` is a claim about display width. A 1600x1600 source shown in a ~380px grid card was
+ * therefore telling the browser "this occupies 1600px", so it dutifully downloaded the 1600w
+ * variant — 116 such images on /insights, 4.19MB (SCA-1120). The intent of the original was
+ * right; the input was the wrong number, and nothing about the markup looked wrong.
+ *
+ * SSR cannot know layout width, so for LAZY images we hand the decision to the browser with
+ * `sizes="auto"`, which is specified for exactly this and uses the real laid-out size. It
+ * requires `loading="lazy"`, so eager/LCP images keep the explicit value.
+ *
+ * The previous string is preserved verbatim as the fallback after `auto,` — browsers without
+ * `sizes=auto` support parse past it and behave exactly as they do today, so this cannot regress
+ * them. Supporting browsers stop guessing.
  */
-export function buildImageSizes(intrinsicWidth: number | null): string {
-  return intrinsicWidth ? `(max-width: 768px) 100vw, ${intrinsicWidth}px` : getImageSizes();
+export function buildImageSizes(intrinsicWidth: number | null, isLazy = false): string {
+  const explicit = intrinsicWidth ? `(max-width: 768px) 100vw, ${intrinsicWidth}px` : getImageSizes();
+  return isLazy ? `auto, ${explicit}` : explicit;
 }
 
 // Semantic layer names whose descendant images are almost never the LCP
