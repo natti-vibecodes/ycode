@@ -99,6 +99,39 @@ function extractInnerHtml(full: string, tag: string): string {
 }
 
 const STYLE_BLOCK_REGEX = /<style[^>]*>([\s\S]*?)<\/style\s*>/gi;
+const LINK_TAG_REGEX = /<link(\s(?:[^>"']|"[^"]*"|'[^']*')*)?\s*\/?>/gi;
+
+/**
+ * Collects the `href` of every `<link rel="stylesheet">` in an HTML string.
+ *
+ * The builder canvas used to inject only `<style>` block contents, which meant a site whose
+ * design system lives in an EXTERNAL stylesheet rendered unstyled in the editor while being
+ * perfectly styled when published (SCA-1337). Here that is the whole hand-written layer —
+ * `.nl-sec`, `.kick`, `.ins-row` and the rest — so every canvas edit was made against a
+ * different set of rules than the page it was editing.
+ *
+ * Only `rel="stylesheet"` is admitted, matching the existing canvas rule that scripts and other
+ * head HTML stay out of the sandbox. A stylesheet cannot execute JavaScript, so it does not widen
+ * that boundary. `rel="preload" as="font"` is deliberately NOT admitted: the fonts already reach
+ * the canvas through the `@font-face` rules in the injected `<style>` block, and a preload is a
+ * fetch-priority hint with no rendering effect — admitting it would add network traffic to the
+ * editor and change nothing on screen.
+ */
+export function extractStylesheetHrefs(html: string | null | undefined): string[] {
+  if (!html) return [];
+  const hrefs: string[] = [];
+  LINK_TAG_REGEX.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = LINK_TAG_REGEX.exec(html)) !== null) {
+    const attrs = parseAttributes(match[1] || '');
+    // `rel` is a space-separated token list, so compare tokens rather than the whole value.
+    const rels = (attrs.rel || '').toLowerCase().split(/\s+/);
+    if (!rels.includes('stylesheet')) continue;
+    const href = attrs.href?.trim();
+    if (href && !hrefs.includes(href)) hrefs.push(href);
+  }
+  return hrefs;
+}
 
 /**
  * Concatenates the inner CSS of every `<style>` block in an HTML string.

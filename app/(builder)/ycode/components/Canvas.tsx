@@ -24,7 +24,8 @@ import { CanvasPortalProvider } from '@/lib/canvas-portal-context';
 import { cn } from '@/lib/utils';
 import { loadSwiperCss } from '@/lib/slider-utils';
 import { resolveReferenceFieldsSync } from '@/lib/collection-utils';
-import { extractStyleBlockContents } from '@/lib/parse-head-html';
+import { extractStyleBlockContents, extractStylesheetHrefs } from '@/lib/parse-head-html';
+import { syncCustomStylesheetLinks } from '@/lib/canvas-stylesheets';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { useFontsStore } from '@/stores/useFontsStore';
 import { useColorVariablesStore } from '@/stores/useColorVariablesStore';
@@ -662,6 +663,33 @@ const Canvas = React.memo(function Canvas({
     }
     styleEl.textContent = generatedCss;
   }, [iframeReady, generatedCss]);
+
+  // Inject `<link rel="stylesheet">` hrefs from head custom code (SCA-1337).
+  //
+  // The two effects above cover INLINE css only, so a design system that lives in an external
+  // stylesheet — as this site's does — reached the published page and never the canvas. Natalia
+  // was editing hand-written sections (`.nl-sec`, `.kick`, `.ins-row`) against Tailwind defaults
+  // while the real rules sat in a file the editor never loaded.
+  //
+  // Appended AFTER `ycode-canvas-styles` on purpose: the published page loads the compiled
+  // Tailwind bundle first and the custom stylesheet second, so site.css wins ties there. Matching
+  // that order is the point — a canvas that renders the same rules in a different cascade is its
+  // own kind of lie.
+  const customStylesheetHrefs = useMemo(
+    () => [
+      ...extractStylesheetHrefs(globalCustomCodeHead),
+      ...extractStylesheetHrefs(pageCustomCodeHead),
+    ].filter((href, i, all) => all.indexOf(href) === i),
+    [globalCustomCodeHead, pageCustomCodeHead]
+  );
+
+  useEffect(() => {
+    if (!iframeReady || !iframeRef.current) return;
+    const iframeDoc = iframeRef.current.contentDocument;
+    if (!iframeDoc) return;
+
+    syncCustomStylesheetLinks(iframeDoc.head, customStylesheetHrefs);
+  }, [iframeReady, customStylesheetHrefs]);
 
   // Render content into iframe
   useEffect(() => {
