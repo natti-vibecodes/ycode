@@ -122,6 +122,22 @@ export function splitCustomCodeByMount(html: string | null | undefined): SplitCu
     const hit = openTag.exec(html);
     if (!hit) break;
 
+    // Skip HTML comments before looking at tags. A comment may CONTAIN tag-like text, and this
+    // chrome's own DO-NOT-REMOVE comments do: the first one explains that Ycode "server-renders
+    // this element at the start of <body>". Matching that `<body>` as an element made the walk
+    // hunt for a `</body>` that does not exist, hit the unclosed-element guard, and abandon the
+    // scan on its very first iteration — so NOTHING was routed and every mount silently went
+    // inert. The nav still appeared first only because `rest` preserves document order and the
+    // nav happens to be first in the file, which is what hid it (SCA-1369 regression).
+    const commentStart = html.indexOf('<!--', cursor);
+    if (commentStart !== -1 && commentStart < hit.index) {
+      const commentEnd = html.indexOf('-->', commentStart);
+      if (commentEnd === -1) break; // unterminated comment: leave the remainder exactly as authored
+      rest += html.slice(cursor, commentEnd + 3);
+      cursor = commentEnd + 3;
+      continue;
+    }
+
     const end = findElementEnd(html, hit.index, hit[1]);
     // Unclosed element: leave everything from here on exactly as authored rather than guess.
     if (end === -1) break;

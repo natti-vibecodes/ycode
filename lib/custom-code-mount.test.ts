@@ -241,3 +241,52 @@ describe('before-layers mount (SCA-1371)', () => {
     }
   });
 });
+
+/**
+ * SCA-1369 regression, found on the live chrome — the reason mounts must skip comments.
+ *
+ * The real custom_code_body opens with a DO-NOT-REMOVE comment that explains the mechanism and,
+ * in doing so, contains the text `<body>`. The top-level walk matched that as an element, looked
+ * for a `</body>` that does not exist, hit the unclosed-element guard and abandoned the scan on
+ * its FIRST iteration — so nothing was routed and every mount went inert.
+ *
+ * It hid because `rest` preserves document order: the nav is first in the file, so it still
+ * rendered first and body-start looked like it was working. The footer being in the wrong place
+ * was the only visible symptom, and that was read as "the new body-end fix doesn't work" rather
+ * than "the fix broke the mount that already worked".
+ */
+describe('comments cannot break the walk (SCA-1369 regression)', () => {
+  const REAL_SHAPE = `    <!-- data-ycode-mount="body-start" is Development's SCA-1253 fix: Ycode
+     server-renders this element at the start of <body>, so no client-side hoist is needed. -->
+<div class="navwrap" data-ycode-mount="body-start"><nav>n</nav></div>
+<footer data-ycode-mount="body-end"><p>&copy; 2026</p></footer>`;
+
+  test('REGRESSION: a comment mentioning <body> does not abort the scan', () => {
+    const out = splitCustomCodeByMount(REAL_SHAPE);
+    assert.ok(out.bodyStart.includes('navwrap'), 'nav must still be hoisted');
+    assert.ok(out.bodyEnd.includes('<footer'), 'footer must reach body-end');
+    assert.equal(out.rest.includes('<footer'), false);
+  });
+
+  test('the comment itself survives in rest, byte-for-byte', () => {
+    // It is a DO-NOT-REMOVE comment; silently eating it would be its own bug.
+    const out = splitCustomCodeByMount(REAL_SHAPE);
+    assert.ok(out.rest.includes('SCA-1253 fix'), 'comment text must be preserved');
+    assert.ok(out.rest.includes('<body>'), 'including the tag-like text inside it');
+  });
+
+  test('a comment containing a full element does not swallow the real one', () => {
+    const html = `<!-- example: <footer data-ycode-mount="body-end">x</footer> -->
+<footer data-ycode-mount="body-end">real</footer>`;
+    const out = splitCustomCodeByMount(html);
+    assert.equal(out.bodyEnd.includes('real'), true);
+    assert.equal((out.bodyEnd.match(/<footer/g) || []).length, 1, 'only the real footer is routed');
+  });
+
+  test('an unterminated comment leaves the remainder exactly as authored', () => {
+    const html = '<!-- never closed <div data-ycode-mount="body-end">x</div>';
+    const out = splitCustomCodeByMount(html);
+    assert.equal(out.rest, html);
+    assert.equal(out.bodyEnd, '');
+  });
+});
