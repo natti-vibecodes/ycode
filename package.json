@@ -40,7 +40,9 @@
     "agent:tools": "TS_NODE_TRANSPILE_ONLY=1 TS_NODE_PROJECT=tsconfig.test.json node --require ts-node/register --require tsconfig-paths/register scripts/list-agent-tools.ts",
     "agent:smoke": "TS_NODE_TRANSPILE_ONLY=1 TS_NODE_PROJECT=tsconfig.test.json node --require ts-node/register --require tsconfig-paths/register scripts/smoke-agent.ts",
     "fonts:update": "npx ts-node scripts/fetch-google-fonts.ts",
-    "prepare": "husky"
+    "prepare": "husky",
+    "review": "NEXT_DIST_DIR=.next-review next build && NEXT_DIST_DIR=.next-review PUBLISH_ALLOWED= next start -p 3003",
+    "review:start": "NEXT_DIST_DIR=.next-review PUBLISH_ALLOWED= next start -p 3003"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",

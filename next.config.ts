@@ -53,6 +53,12 @@ function bootCommit(): string {
 }
 
 const nextConfig: NextConfig = {
+  /**
+   * Build output directory (SCA-1316). The REVIEW server on :3003 must not share `.next` with
+   * the dev server on :3002 — two Next processes over one build dir is what produced
+   * MODULE_UNPARSABLE and a dead site on 2026-08-12. `npm run review` sets NEXT_DIST_DIR.
+   */
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   env: {
     YCODE_BOOT_COMMIT: bootCommit(),
   },
