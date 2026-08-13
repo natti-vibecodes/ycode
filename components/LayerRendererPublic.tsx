@@ -20,6 +20,7 @@ import { getLayerHtmlTag, getClassesString, getText, resolveFieldValue, isTextCo
 import { getMapIframeProps, DEFAULT_MAP_SETTINGS, resolveMarkerColor } from '@/lib/map-utils';
 import { HTML_TO_REACT_ATTRS } from '@/lib/parse-head-html';
 import { isLayerEmpty } from '@/lib/layer-emptiness';
+import { splitInlineHandlers, applyInlineHandlers } from '@/lib/inline-handlers';
 import { FORM_SUCCESS_EVENT, FORM_ERROR_EVENT, buildFormEventDetail, dispatchFormEvent } from '@/lib/form-events';
 import { SWIPER_CLASS_MAP, SWIPER_DATA_ATTR_MAP } from '@/lib/slider-constants';
 import { getSliderPresizeVars } from '@/lib/slider-utils';
@@ -900,7 +901,12 @@ const LayerItem: React.FC<{
     // <input>) is not empty just because it has no children. See lib/layer-emptiness.ts.
     const isEmpty = isLayerEmpty(layer, textContent, children as unknown[] | undefined, htmlTag);
 
+    const inlineHandlers = splitInlineHandlers(layer.settings?.customAttributes as Record<string, string> | undefined);
     const combinedRef = (node: HTMLElement | null) => {
+      // setAttribute, not addEventListener: the authored code relies on inline-handler semantics
+      // where `this` is the element — `this.closest('section').querySelector('.rail3')` is the
+      // whole mechanism, and a listener wrapper would bind `this` differently (SCA-1380).
+      applyInlineHandlers(node, inlineHandlers.handlers);
       if (isFilterLayer) {
         (filterLayerRef as React.MutableRefObject<HTMLDivElement | null>).current = node as HTMLDivElement | null;
       }
@@ -1016,9 +1022,13 @@ const LayerItem: React.FC<{
       elementProps.id = anchorMap[layer.id];
     }
 
-    // Apply custom attributes from settings (map HTML attr names to JSX equivalents)
+    // Apply custom attributes from settings (map HTML attr names to JSX equivalents).
+    // Inline `on*` handlers are held back and applied to the node after mount (SCA-1380): React
+    // drops a lowercase `onclick` prop entirely, so the carousel arrows on ~10 pages rendered with
+    // no handler at all — the buttons and their `.rail3` target were in the DOM and nothing
+    // happened on click.
     if (layer.settings?.customAttributes) {
-      applyCustomAttributes(elementProps, layer.settings.customAttributes);
+      applyCustomAttributes(elementProps, inlineHandlers.attributes);
     }
 
     // Pagination count/info layers: expose the (translated) template so the
