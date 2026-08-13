@@ -579,6 +579,13 @@ export default async function PageRenderer({
     ? await resolveCustomCodePlaceholders(rawPageCustomCodeBody, collectionItem, collectionFields, usePublishedData)
     : rawPageCustomCodeBody;
 
+  // Page custom code may declare `before-layers` to render ahead of the layer tree (SCA-1371).
+  // The 20 case studies keep their whole article here with an empty layer tree, so it otherwise
+  // renders after everything. Opt-in per page: a page that declares nothing gets
+  // `rest === pageCustomCodeBody` and is byte-for-byte unchanged, which is what keeps
+  // /case-studies' filter script exactly where it is.
+  const mountedPageCode = splitCustomCodeByMount(pageCustomCodeBody);
+
   const { bodyClasses, childLayers: rawChildLayers } = extractBodyLayer(resolvedLayers);
   const hasLayers = rawChildLayers.length > 0;
 
@@ -925,6 +932,13 @@ export default async function PageRenderer({
           after, which is what makes the landmark meaningful rather than decorative. The article
           and legal templates already did this — only the page-builder path was missing it. */}
       <main>
+      {/* Page body that declared before-layers — INSIDE <main>, so it is still the landmark's
+          content (SCA-1281). For a case study whose article lives entirely in custom code, that
+          article IS the page content; rendering it outside <main> would order it correctly and
+          break the landmark that exists to make the first substantive text the real one. */}
+      {mountedPageCode.beforeLayers && (
+        <CustomCodeInjector html={mountedPageCode.beforeLayers} />
+      )}
       <div
         id="ybody"
         className="contents"
@@ -995,9 +1009,10 @@ export default async function PageRenderer({
         <CustomCodeInjector html={mountedCustomCode.rest} />
       )}
 
-      {/* Inject page-specific custom body code */}
-      {pageCustomCodeBody && (
-        <CustomCodeInjector html={pageCustomCodeBody} />
+      {/* Inject page-specific custom body code — minus anything that declared before-layers
+          above. Unchanged for every page that declares nothing. */}
+      {mountedPageCode.rest && (
+        <CustomCodeInjector html={mountedPageCode.rest} />
       )}
 
       {/* Global chrome that declared data-ycode-mount="body-end" — rendered HERE, AFTER the

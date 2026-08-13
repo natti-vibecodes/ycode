@@ -21,7 +21,7 @@
  */
 
 export const MOUNT_ATTR = 'data-ycode-mount';
-export type MountPoint = 'body-start' | 'body-end';
+export type MountPoint = 'body-start' | 'body-end' | 'before-layers';
 
 const VOID_TAGS = new Set([
   'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
@@ -46,6 +46,19 @@ export interface SplitCustomCode {
    * written on the assumption that global code has already run.
    */
   bodyEnd: string;
+  /**
+   * Chunks declaring before-layers, rendered before the page's LAYER TREE (SCA-1371).
+   *
+   * Page-level only. The 20 case studies keep their whole article in page custom_code.body with
+   * an empty layer tree, so their content rendered after everything else on the page. Declaring
+   * this moves it ahead of the layer tree while leaving it exactly where it is in the server
+   * HTML — inline and crawlable.
+   *
+   * That last property is the reason this exists rather than an htmlEmbed migration: embeds are
+   * a sandboxed iframe or client-side innerHTML, so moving 20 ranking pages into them would pull
+   * their content out of the crawlable response.
+   */
+  beforeLayers: string;
 }
 
 /**
@@ -86,9 +99,9 @@ function findElementEnd(html: string, openStart: number, tag: string): number {
  * are byte-for-byte unaffected.
  */
 export function splitCustomCodeByMount(html: string | null | undefined): SplitCustomCode {
-  if (!html || !html.includes(MOUNT_ATTR)) return { bodyStart: '', rest: html ?? '', bodyEnd: '' };
+  if (!html || !html.includes(MOUNT_ATTR)) return { bodyStart: '', rest: html ?? '', bodyEnd: '', beforeLayers: '' };
 
-  const picked: Record<MountPoint, string[]> = { 'body-start': [], 'body-end': [] };
+  const picked: Record<MountPoint, string[]> = { 'body-start': [], 'body-end': [], 'before-layers': [] };
   let rest = '';
   let cursor = 0;
 
@@ -102,7 +115,7 @@ export function splitCustomCodeByMount(html: string | null | undefined): SplitCu
   // chrome relies on the old behaviour — only `<div class="navwrap">` declares a mount, and it is
   // top-level — so the fix is to make the code match the documented, safer rule.
   const openTag = /<([a-zA-Z][\w-]*)\b[^>]*>/g;
-  const declares = new RegExp(`\\b${MOUNT_ATTR}\\s*=\\s*["'](body-start|body-end)["']`, 'i');
+  const declares = new RegExp(`\\b${MOUNT_ATTR}\\s*=\\s*["'](body-start|body-end|before-layers)["']`, 'i');
 
   for (;;) {
     openTag.lastIndex = cursor;
@@ -129,5 +142,6 @@ export function splitCustomCodeByMount(html: string | null | undefined): SplitCu
     bodyStart: picked['body-start'].join('\n'),
     rest,
     bodyEnd: picked['body-end'].join('\n'),
+    beforeLayers: picked['before-layers'].join('\n'),
   };
 }

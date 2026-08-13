@@ -177,3 +177,67 @@ describe('body-end mount (SCA-1369)', () => {
     }
   });
 });
+
+/**
+ * SCA-1371 — the page-level `before-layers` mount.
+ *
+ * The 20 case studies keep their whole article in page custom_code.body with an EMPTY layer tree,
+ * so it rendered after everything else on the page. This lets a page declare that its body comes
+ * before the layer tree, WITHOUT moving the content out of the server HTML.
+ *
+ * That last part is the reason this primitive exists instead of an htmlEmbed migration: embeds
+ * are a sandboxed iframe or client-side innerHTML, so migrating 20 ranking pages into them would
+ * have pulled their content out of the crawlable response.
+ */
+describe('before-layers mount (SCA-1371)', () => {
+  const ARTICLE = '<article data-ycode-mount="before-layers"><h1>Aegis Capital</h1></article>';
+
+  test('REGRESSION: a page declaring nothing is byte-for-byte unchanged', () => {
+    // /case-studies keeps a filter script in page body and declares no mount. If this fails,
+    // one opt-in feature reordered every page's body code.
+    const filterScript = '<script>initFilters()</script><div id="x"></div>';
+    const out = splitCustomCodeByMount(filterScript);
+    assert.equal(out.rest, filterScript);
+    assert.equal(out.beforeLayers, '');
+  });
+
+  test('a declaring article is lifted out of rest', () => {
+    const out = splitCustomCodeByMount(`${ARTICLE}<script>tail()</script>`);
+    assert.equal(out.beforeLayers, ARTICLE);
+    assert.equal(out.rest, '<script>tail()</script>');
+  });
+
+  test('all three mounts route independently in one pass', () => {
+    const nav = '<div data-ycode-mount="body-start">n</div>';
+    const foot = '<footer data-ycode-mount="body-end">f</footer>';
+    const out = splitCustomCodeByMount(`${foot}${ARTICLE}${nav}`);
+    assert.equal(out.bodyStart, nav);
+    assert.equal(out.bodyEnd, foot);
+    assert.equal(out.beforeLayers, ARTICLE);
+    assert.equal(out.rest.trim(), '');
+  });
+
+  test('multiple before-layers chunks keep document order', () => {
+    const a = '<section data-ycode-mount="before-layers">A</section>';
+    const b = '<section data-ycode-mount="before-layers">B</section>';
+    assert.equal(splitCustomCodeByMount(a + b).beforeLayers, `${a}\n${b}`);
+  });
+
+  test('nested declarations are ignored here too', () => {
+    const nested = '<div class="wrap"><article data-ycode-mount="before-layers">x</article></div>';
+    const out = splitCustomCodeByMount(nested);
+    assert.equal(out.beforeLayers, '');
+    assert.equal(out.rest, nested);
+  });
+
+  test('every split result carries all four fields', () => {
+    // A caller destructuring `beforeLayers` must never get undefined and render nothing silently.
+    for (const input of ['', null, undefined, '<div>plain</div>']) {
+      const out = splitCustomCodeByMount(input);
+      assert.equal(typeof out.bodyStart, 'string');
+      assert.equal(typeof out.bodyEnd, 'string');
+      assert.equal(typeof out.beforeLayers, 'string');
+      assert.equal(typeof out.rest, 'string');
+    }
+  });
+});
