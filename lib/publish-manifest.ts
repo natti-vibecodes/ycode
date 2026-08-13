@@ -63,6 +63,14 @@ export interface PublishManifest {
   willShip: ManifestEntry[];
   /** Pages holding their own copy of a queued component — the fix will NOT reach these. */
   willNotReach: { pageId: string; pageName: string; componentName: string; accepted: boolean }[];
+  /**
+   * Affected pages that are not publishable, so they serve nothing whatever ships.
+   *
+   * A named list rather than only a count in the summary: the count alone sent a reader to
+   * `willNotReach` — a different signal entirely, and empty — leaving them to conclude the
+   * manifest contradicted itself. An unactionable warning is worse than no warning.
+   */
+  willNotServe: { pageId: string; pageName: string; url: string }[];
   verify: { url: string; expect: string }[];
   runningCodeDrift: { bootCommit: string | null; headCommit: string | null; stale: boolean };
   summary: string;
@@ -145,13 +153,24 @@ export function buildPublishManifest(input: ManifestInput): PublishManifest {
   const stale = Boolean(boot && head && boot !== head);
 
   const unexpected = willNotReach.filter((w) => !w.accepted);
-  const unpublishable = [...byPage.values()].filter((e) => !e.publishable);
+  const willNotServe = [...byPage.values()]
+    .filter((e) => !e.publishable)
+    .map((e) => ({ pageId: e.pageId, pageName: e.pageName, url: e.url }));
+
+  // Name the pages in the summary. "4 page(s) are not publishable" makes a reader go hunting,
+  // and the nearest list (willNotReach) is a different signal — which read as the manifest
+  // contradicting itself when that list was empty.
+  const named = (urls: string[]) =>
+    urls.length <= 4 ? urls.join(', ') : `${urls.slice(0, 4).join(', ')} +${urls.length - 4} more`;
+
   const summary = [
     `${byPage.size} page(s) will serve this publish.`,
     unexpected.length ? `⚠️ ${unexpected.length} page(s) hold their own copy and will NOT get it.` : '',
-    unpublishable.length ? `⚠️ ${unpublishable.length} page(s) are affected but not publishable — the edit ships and the page still serves nothing.` : '',
+    willNotServe.length
+      ? `⚠️ ${willNotServe.length} page(s) are affected but not publishable, so they serve nothing either way: ${named(willNotServe.map((e) => e.url))}.`
+      : '',
     stale ? `⚠️ Running server was started from ${boot?.slice(0, 7)}, HEAD is ${head?.slice(0, 7)} — restart to be sure what is running.` : '',
   ].filter(Boolean).join(' ');
 
-  return { willShip: [...byPage.values()], willNotReach, verify, runningCodeDrift: { bootCommit: boot, headCommit: head, stale }, summary };
+  return { willShip: [...byPage.values()], willNotReach, willNotServe, verify, runningCodeDrift: { bootCommit: boot, headCommit: head, stale }, summary };
 }

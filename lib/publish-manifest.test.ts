@@ -140,6 +140,35 @@ describe('buildPublishManifest (SCA-1272)', () => {
     assert.match(m.verify[0].expect, /substitute a real item slug/);
   });
 
+  test('REGRESSION: the not-publishable warning NAMES its pages (SCA-1272 follow-up)', () => {
+    // A bare count sent a reader to willNotReach — a different signal, and empty — which read
+    // as the manifest contradicting itself. An unactionable warning is worse than none.
+    const m = buildPublishManifest({
+      ...queuedComponent,
+      pages: PAGES.map((p) => (p.id === 'p-db' ? { ...p, isPublishable: false } : p)),
+    });
+    assert.deepEqual(m.willNotServe.map((e) => e.url), ['/services/design-branding']);
+    assert.match(m.summary, /not publishable, so they serve nothing either way: \/services\/design-branding\./);
+  });
+
+  test('willNotServe is empty — not absent — when every affected page can serve', () => {
+    const m = buildPublishManifest(queuedComponent);
+    assert.deepEqual(m.willNotServe, []);
+    assert.doesNotMatch(m.summary, /not publishable/);
+  });
+
+  test('a long not-publishable list is truncated rather than unreadable', () => {
+    const many = Array.from({ length: 7 }, (_, i) => ({
+      id: `p-${i}`, name: `P${i}`, layers: [], url: `/p${i}`, isPublishable: false,
+    }));
+    const m = buildPublishManifest({
+      queued: { pages: many.map((p) => ({ id: p.id, name: p.name })), components: [] },
+      components: [], pages: many,
+    });
+    assert.equal(m.willNotServe.length, 7);          // full detail preserved in the list
+    assert.match(m.summary, /\+3 more/);              // summary stays legible
+  });
+
   test('nothing queued produces an empty, honest manifest', () => {
     const m = buildPublishManifest({ queued: { pages: [], components: [] }, components: [NEWSLETTER], pages: PAGES });
     assert.deepEqual(m.willShip, []);
