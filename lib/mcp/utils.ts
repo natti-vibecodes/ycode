@@ -463,6 +463,13 @@ export function applyDesignToLayer(
     // Simple path: merge design and regenerate all classes (preserving state/breakpoint classes)
     const mergedDesign: DesignProperties = { ...layer.design };
     for (const [cat, props] of Object.entries(inputDesign)) {
+      // `null` REMOVES the category outright (SCA-1336). Merging can only ever add or overwrite,
+      // so without this a mistaken write could be switched off but never taken back off the
+      // layer — and a category left in place keeps showing up in every read of that design.
+      if (props === null) {
+        delete mergedDesign[cat as keyof DesignProperties];
+        continue;
+      }
       if (props && typeof props === 'object') {
         mergedDesign[cat as keyof DesignProperties] = {
           ...(mergedDesign[cat as keyof DesignProperties] || {}),

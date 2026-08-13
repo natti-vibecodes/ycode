@@ -169,9 +169,23 @@ function buildRichTextTarget(): CompactTarget {
   };
 }
 
+/**
+ * Unwrap a nullable schema to its object branch.
+ *
+ * Design categories are `.nullable()` so `null` can remove one (SCA-1336), and zod emits that as
+ * `anyOf: [{type:'object', properties}, {type:'null'}]`. Reading `.properties` off the wrapper
+ * yields undefined, which silently produced "Props: " with every property name gone — the agent
+ * would have been handed a design tool it could not use. Caught by the compaction test.
+ */
+function objectBranch(schema: JsonObject): JsonObject {
+  if (schema.properties) return schema;
+  const branches = (schema.anyOf ?? schema.oneOf) as JsonObject[] | undefined;
+  return branches?.find((b) => b && b.properties) ?? schema;
+}
+
 /** "name (short hint), name, ..." — property names are the part the model can't guess. */
 function summarizeProperties(objectSchema: JsonObject): string {
-  const properties = (objectSchema.properties ?? {}) as Record<string, JsonObject>;
+  const properties = (objectBranch(objectSchema).properties ?? {}) as Record<string, JsonObject>;
   return Object.entries(properties)
     .map(([name, prop]) => {
       const description = typeof prop.description === 'string' ? prop.description : '';

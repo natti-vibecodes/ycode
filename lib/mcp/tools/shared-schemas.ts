@@ -45,6 +45,12 @@ const gridTracksSchema = z.preprocess(
   z.string(),
 ).optional();
 
+/**
+ * Passing `null` for a category REMOVES it (SCA-1336). `isActive: false` switches a category
+ * off but keeps the values, which is right for toggling and wrong for undoing — before this
+ * there was no way to take a property back off a layer at all, so a mistaken write could only
+ * be papered over, never reverted.
+ */
 export const designSchema = z.object({
   layout: z.object({
     isActive: z.boolean().optional(),
@@ -59,7 +65,7 @@ export const designSchema = z.object({
     rowGap: z.string().optional(),
     gridTemplateColumns: gridTracksSchema,
     gridTemplateRows: gridTracksSchema,
-  }).optional(),
+  }).nullable().optional(),
   typography: z.object({
     isActive: z.boolean().optional(),
     fontSize: z.string().optional(),
@@ -80,7 +86,7 @@ export const designSchema = z.object({
     verticalAlign: z.string().optional(),
     color: z.string().optional(),
     placeholderColor: z.string().optional(),
-  }).optional(),
+  }).nullable().optional(),
   spacing: z.object({
     isActive: z.boolean().optional(),
     padding: z.string().optional(),
@@ -93,7 +99,7 @@ export const designSchema = z.object({
     marginRight: z.string().optional(),
     marginBottom: z.string().optional(),
     marginLeft: z.string().optional(),
-  }).optional(),
+  }).nullable().optional(),
   sizing: z.object({
     isActive: z.boolean().optional(),
     width: z.string().optional(),
@@ -108,7 +114,7 @@ export const designSchema = z.object({
     objectPosition: z.string().nullable().optional().describe('top | bottom | left | right | center | left-top | right-top | left-bottom | right-bottom'),
     gridColumnSpan: z.string().nullable().optional().describe('Grid column span, e.g. "2" or "span 3"'),
     gridRowSpan: z.string().nullable().optional().describe('Grid row span, e.g. "2" or "span 3"'),
-  }).optional(),
+  }).nullable().optional(),
   borders: z.object({
     isActive: z.boolean().optional(),
     borderWidth: z.string().optional(),
@@ -130,7 +136,7 @@ export const designSchema = z.object({
     outlineWidth: z.string().optional(),
     outlineColor: z.string().optional(),
     outlineOffset: z.string().optional(),
-  }).optional(),
+  }).nullable().optional(),
   backgrounds: z.object({
     isActive: z.boolean().optional(),
     backgroundColor: z.string().optional(),
@@ -143,7 +149,7 @@ export const designSchema = z.object({
       .describe('Background image CSS values keyed by var name. Use "--bg-img" for desktop neutral.'),
     bgGradientVars: z.record(z.string(), z.string()).optional()
       .describe('Gradient CSS values keyed by var name. Use "--bg-img" for desktop neutral. Value is a CSS gradient like "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"'),
-  }).optional(),
+  }).nullable().optional(),
   effects: z.object({
     isActive: z.boolean().optional(),
     opacity: z.string().optional(),
@@ -153,7 +159,7 @@ export const designSchema = z.object({
     filter: z.string().optional().describe('CSS filter, e.g. "grayscale(1)" or "brightness(0.5)"'),
     backdropFilter: z.string().optional().describe('CSS backdrop-filter, e.g. "saturate(180%)"'),
     mixBlendMode: z.string().optional().describe('CSS mix-blend-mode, e.g. "multiply", "screen", "overlay"'),
-  }).optional(),
+  }).nullable().optional(),
   positioning: z.object({
     isActive: z.boolean().optional(),
     position: z.string().optional(),
@@ -162,7 +168,7 @@ export const designSchema = z.object({
     bottom: z.string().optional(),
     left: z.string().optional(),
     zIndex: z.string().optional(),
-  }).optional(),
+  }).nullable().optional(),
   transforms: z.object({
     isActive: z.boolean().optional(),
     scale: z.string().optional().describe('Uniform scale factor, e.g. "1.1" or "0.95"'),
@@ -172,15 +178,15 @@ export const designSchema = z.object({
     skewX: z.string().optional(),
     skewY: z.string().optional(),
     transformOrigin: z.string().optional().describe('CSS transform-origin, e.g. "center" or "top left"'),
-  }).optional(),
+  }).nullable().optional(),
   transitions: z.object({
     isActive: z.boolean().optional(),
     transitionProperty: z.string().optional().describe('e.g. "all", "opacity", "transform, background-color"'),
     duration: z.string().optional().describe('e.g. "200ms" or "0.3s"'),
     easing: z.string().optional().describe('e.g. "ease-in-out", "linear", "cubic-bezier(...)"'),
     delay: z.string().optional().describe('e.g. "100ms"'),
-  }).optional(),
-}).describe('Design properties object. Set isActive: true on any category to apply it.');
+  }).nullable().optional(),
+}).describe('Design properties object. Set isActive: true on any category to apply it. Pass null for a category to REMOVE it entirely (isActive: false only switches it off, keeping the values).');
 
 // ── Drift guard ─────────────────────────────────────────────────────────────
 //
@@ -200,7 +206,10 @@ type IntentionallyUnexposed = {
   borders: 'borderWidthMode' | 'borderRadiusMode';
 };
 
-type NonUndefined<T> = Exclude<T, undefined>;
+// Categories are `.nullable().optional()` — `null` means "remove this category" (SCA-1336) —
+// so the drift check must strip BOTH before reading a category's keys. Without stripping null,
+// `keyof` over `{...} | null` yields never and the guard silently stops guarding.
+type NonUndefined<T> = Exclude<T, undefined | null>;
 type CategoryKeys<T> = keyof NonUndefined<T>;
 
 type ExpectedKeys<K extends keyof DesignProperties> = Exclude<

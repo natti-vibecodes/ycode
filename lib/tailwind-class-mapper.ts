@@ -1191,6 +1191,15 @@ export function designToClasses(design?: Layer['design']): string[] {
   Object.entries(design).forEach(([category, properties]) => {
     if (!properties || typeof properties !== 'object') return;
 
+    // A category switched OFF must emit nothing. The loop below skipped the `isActive` property
+    // but never read its value, so deactivating a category left every other property still
+    // generating classes — `isActive: false` looked like an undo and wasn't, which is how a bad
+    // value survives an author's attempt to revert it (SCA-1336).
+    //
+    // Only an EXPLICIT false counts. Plenty of existing categories omit the flag entirely, and
+    // treating absent as off would silently strip styling across the whole site.
+    if ((properties as { isActive?: boolean }).isActive === false) return;
+
     Object.entries(properties).forEach(([property, value]) => {
       if (property === 'isActive' || !value) return;
 
