@@ -26,6 +26,7 @@ import { loadSwiperCss } from '@/lib/slider-utils';
 import { resolveReferenceFieldsSync } from '@/lib/collection-utils';
 import { extractStyleBlockContents, extractStylesheetHrefs } from '@/lib/parse-head-html';
 import { syncCustomStylesheetLinks } from '@/lib/canvas-stylesheets';
+import { canvasRootAttributes, syncCanvasRootAttributes } from '@/lib/canvas-root-attributes';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { useFontsStore } from '@/stores/useFontsStore';
 import { useColorVariablesStore } from '@/stores/useColorVariablesStore';
@@ -690,6 +691,25 @@ const Canvas = React.memo(function Canvas({
 
     syncCustomStylesheetLinks(iframeDoc.head, customStylesheetHrefs);
   }, [iframeReady, customStylesheetHrefs]);
+
+  // Mirror the served document's <html> attributes onto the canvas root (SCA-1343).
+  //
+  // The site pins itself light with a declared `data-theme="light"`, and a lot of CSS branches on
+  // it. Loading the real stylesheets above without this context resolves those branches the wrong
+  // way — theme-dependent sections render in their dark variant in the editor while being light
+  // on the site. Read from the declaration rather than copied off a served page, so SCA-1302's
+  // dark mode moves the canvas with the site and never needs a second fix here.
+  const canvasRootAttrs = useMemo(
+    () => canvasRootAttributes(globalCustomCodeHead),
+    [globalCustomCodeHead]
+  );
+
+  useEffect(() => {
+    if (!iframeReady || !iframeRef.current) return;
+    const iframeDoc = iframeRef.current.contentDocument;
+    if (!iframeDoc?.documentElement) return;
+    syncCanvasRootAttributes(iframeDoc.documentElement, canvasRootAttrs);
+  }, [iframeReady, canvasRootAttrs]);
 
   // Render content into iframe
   useEffect(() => {
