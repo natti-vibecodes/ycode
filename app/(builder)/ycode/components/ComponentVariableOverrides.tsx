@@ -8,6 +8,7 @@
 
 import React, { useCallback } from 'react';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import Icon from '@/components/ui/icon';
 import { cn } from '@/lib/utils';
@@ -419,6 +420,26 @@ export default function ComponentVariableOverrides({
                   </SelectContent>
                 </Select>
               )}
+            </div>
+          </div>
+        );
+      }
+      case 'boolean': {
+        // The instance's own on/off. Reads `!== false` so a variable that has never been set
+        // shows as ON, matching the resolver — which hides a layer only on an explicit false, so
+        // that an unset or dangling variable can never silently delete a section (SCA-1357).
+        const current = getTypedValue('boolean' as 'icon', variable.id) as { value?: boolean } | undefined;
+        const fallback = (variable.default_value as { value?: boolean } | undefined)?.value;
+        const isOn = (current?.value ?? fallback) !== false;
+
+        return (
+          <div key={variable.id} className="grid grid-cols-3 gap-2 items-center">
+            {renderLabel(variable, { centered: true })}
+            <div className="col-span-2 flex justify-end">
+              <Switch
+                checked={isOn}
+                onCheckedChange={(val) => handleTypedChange('boolean' as 'icon', variable.id, { value: val } as never)}
+              />
             </div>
           </div>
         );

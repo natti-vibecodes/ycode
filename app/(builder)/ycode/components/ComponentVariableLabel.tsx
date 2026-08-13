@@ -30,6 +30,7 @@ export const VARIABLE_TYPE_ICONS: Record<string, IconProps['name']> = {
   video: 'video',
   icon: 'icon',
   variant: 'component',
+  boolean: 'eye',
 };
 
 interface ComponentVariableLabelProps {

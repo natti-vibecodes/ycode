@@ -205,6 +205,7 @@ interface ComponentsActions {
    *  variable that drives the `componentVariantId` of any nested-instance layer
    *  whose `componentVariantVariableId` points at it. */
   addVariantVariable: (componentId: string, name: string) => Promise<string | null>;
+  addBooleanVariable: (componentId: string, name: string) => Promise<string | null>;
   updateTextVariable: (componentId: string, variableId: string, updates: { name?: string; placeholder?: string; default_value?: any }) => Promise<void>;
   reorderVariables: (componentId: string, orderedIds: string[]) => Promise<void>;
   deleteTextVariable: (componentId: string, variableId: string) => Promise<void>;
@@ -1231,6 +1232,43 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
         return variableId;
       } catch (error) {
         console.error('Failed to add variant variable:', error);
+        return null;
+      }
+    },
+
+    // Add a boolean ("show this or not") variable (SCA-1357). Defaults to true, so adding one
+    // never blanks an existing section the moment it is created — the switch starts ON and the
+    // author turns it off deliberately.
+    addBooleanVariable: async (componentId, name) => {
+      const component = get().getComponentById(componentId);
+      if (!component) return null;
+
+      const variableId = generateId('cpv');
+      const newVariable = { id: variableId, name, type: 'boolean' as const, default_value: { value: true } as never };
+      const updatedVariables = [...(component.variables || []), newVariable];
+
+      try {
+        const response = await fetch(`/ycode/api/components/${componentId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ variables: updatedVariables }),
+        });
+
+        const result = await response.json();
+        if (result.error) {
+          console.error('Failed to add boolean variable:', result.error);
+          return null;
+        }
+
+        set((state) => ({
+          components: state.components.map((c) =>
+            c.id === componentId ? { ...c, variables: updatedVariables } : c
+          ),
+        }));
+
+        return variableId;
+      } catch (error) {
+        console.error('Failed to add boolean variable:', error);
         return null;
       }
     },

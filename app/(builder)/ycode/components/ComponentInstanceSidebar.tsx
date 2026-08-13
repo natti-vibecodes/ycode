@@ -96,7 +96,7 @@ export default function ComponentInstanceSidebar({
 
   const allVariables = component.variables || [];
   const overrides = selectedLayer.componentOverrides;
-  const hasOverrides = ['text', 'rich_text', 'image', 'link', 'audio', 'video', 'icon', 'variant']
+  const hasOverrides = ['text', 'rich_text', 'image', 'link', 'audio', 'video', 'icon', 'variant', 'boolean']
     .some(cat => Object.keys(overrides?.[cat as keyof typeof overrides] || {}).length > 0);
 
   const handleEditMasterComponent = useCallback(async () => {

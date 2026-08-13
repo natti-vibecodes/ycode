@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import Icon from '@/components/ui/icon';
@@ -136,6 +137,7 @@ export default function ComponentVariablesDialog({
   const addVideoVariable = useComponentsStore((state) => state.addVideoVariable);
   const addIconVariable = useComponentsStore((state) => state.addIconVariable);
   const addVariantVariable = useComponentsStore((state) => state.addVariantVariable);
+  const addBooleanVariable = useComponentsStore((state) => state.addBooleanVariable);
   const updateTextVariable = useComponentsStore((state) => state.updateTextVariable);
   const reorderVariables = useComponentsStore((state) => state.reorderVariables);
   const deleteTextVariable = useComponentsStore((state) => state.deleteTextVariable);
@@ -282,6 +284,21 @@ export default function ComponentVariablesDialog({
       setSelectedVariableId(newId);
       setEditingName('Variant');
     }
+  };
+
+  const handleAddBooleanVariable = async () => {
+    if (!componentId) return;
+
+    const newId = await addBooleanVariable(componentId, 'Show section');
+    if (newId) {
+      setSelectedVariableId(newId);
+      setEditingName('Show section');
+    }
+  };
+
+  const handleBooleanDefaultValueChange = async (value: boolean) => {
+    if (!componentId || !selectedVariable) return;
+    await updateTextVariable(componentId, selectedVariable.id, { default_value: { value } });
   };
 
   const handleVariantDefaultValueChange = (variantId: string) => {
@@ -443,6 +460,10 @@ export default function ComponentVariablesDialog({
                       <Icon name={VARIABLE_TYPE_ICONS['variant']} className="size-3" />
                       Variant
                     </DropdownMenuItem>
+                    <DropdownMenuItem onClick={handleAddBooleanVariable}>
+                      <Icon name={VARIABLE_TYPE_ICONS['boolean']} className="size-3" />
+                      Show / hide
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
@@ -555,6 +576,19 @@ export default function ComponentVariablesDialog({
                         value={selectedVariable.default_value as IconSettingsValue}
                         onChange={handleIconDefaultValueChange}
                       />
+                    ) : selectedVariable.type === 'boolean' ? (
+                      <label className="flex items-center justify-between gap-3 py-1">
+                        <span className="text-xs">
+                          Shown by default
+                          <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                            Off removes the linked layers from the page entirely — they are not just hidden.
+                          </span>
+                        </span>
+                        <Switch
+                          checked={(selectedVariable.default_value as { value?: boolean } | undefined)?.value !== false}
+                          onCheckedChange={handleBooleanDefaultValueChange}
+                        />
+                      </label>
                     ) : selectedVariable.type === 'variant' ? (() => {
                       const options = collectVariantVariableOptions(component, allComponents, selectedVariable.id);
                       const currentDefault = (selectedVariable.default_value as VariantSettingsValue | undefined)?.variant_id;
