@@ -21,7 +21,7 @@
  */
 
 export const MOUNT_ATTR = 'data-ycode-mount';
-export type MountPoint = 'body-start';
+export type MountPoint = 'body-start' | 'body-end';
 
 const VOID_TAGS = new Set([
   'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
@@ -33,6 +33,19 @@ export interface SplitCustomCode {
   bodyStart: string;
   /** Everything else, rendered where custom code has always gone. */
   rest: string;
+  /**
+   * Chunks declaring body-end, rendered AFTER the page's own custom body code (SCA-1369).
+   *
+   * The footer needs this. Global body code renders before page custom code, which is correct
+   * for a page whose content lives in its LAYER TREE — nav, layers, footer. But the 20 case
+   * studies keep ~75 KB of content in page custom code with an empty layer tree, so they served
+   * NAV → FOOTER → CONTENT: the footer at the top of the page.
+   *
+   * Symmetric to body-start rather than reordering the two injectors: swapping global and page
+   * body code wholesale would silently change ordering on EVERY page, including page-body scripts
+   * written on the assumption that global code has already run.
+   */
+  bodyEnd: string;
 }
 
 /**
@@ -73,28 +86,48 @@ function findElementEnd(html: string, openStart: number, tag: string): number {
  * are byte-for-byte unaffected.
  */
 export function splitCustomCodeByMount(html: string | null | undefined): SplitCustomCode {
-  if (!html || !html.includes(MOUNT_ATTR)) return { bodyStart: '', rest: html ?? '' };
+  if (!html || !html.includes(MOUNT_ATTR)) return { bodyStart: '', rest: html ?? '', bodyEnd: '' };
 
-  const marker = new RegExp(`<([a-zA-Z][\\w-]*)\\b[^>]*\\b${MOUNT_ATTR}\\s*=\\s*["']body-start["'][^>]*>`, 'gi');
-  const picked: string[] = [];
+  const picked: Record<MountPoint, string[]> = { 'body-start': [], 'body-end': [] };
   let rest = '';
   let cursor = 0;
 
+  // Walk TOP-LEVEL nodes only, checking each one's own opening tag for the marker.
+  //
+  // The previous implementation regex-scanned the whole string, which lifted NESTED declarations
+  // out of their parents — leaving `<div class="wrap"></div>` behind and moving the child
+  // elsewhere. That is exactly the DOM surgery this module's header says it removes, and the
+  // header claimed nested markers were already ignored. They were not; the comment described an
+  // intent the code never had (found while adding body-end, SCA-1369). Nothing in the live
+  // chrome relies on the old behaviour — only `<div class="navwrap">` declares a mount, and it is
+  // top-level — so the fix is to make the code match the documented, safer rule.
+  const openTag = /<([a-zA-Z][\w-]*)\b[^>]*>/g;
+  const declares = new RegExp(`\\b${MOUNT_ATTR}\\s*=\\s*["'](body-start|body-end)["']`, 'i');
+
   for (;;) {
-    marker.lastIndex = cursor;
-    const hit = marker.exec(html);
+    openTag.lastIndex = cursor;
+    const hit = openTag.exec(html);
     if (!hit) break;
 
-    // Only top-level elements may declare a mount point. Anything nested is left in place.
-    const before = html.slice(cursor, hit.index);
     const end = findElementEnd(html, hit.index, hit[1]);
+    // Unclosed element: leave everything from here on exactly as authored rather than guess.
     if (end === -1) break;
 
-    rest += before;
-    picked.push(html.slice(hit.index, end));
+    const declared = declares.exec(hit[0]);
+    if (declared) {
+      rest += html.slice(cursor, hit.index);
+      picked[declared[1].toLowerCase() as MountPoint].push(html.slice(hit.index, end));
+    } else {
+      // Not a mount: keep the element AND anything before it, and do not descend into it.
+      rest += html.slice(cursor, end);
+    }
     cursor = end;
   }
 
   rest += html.slice(cursor);
-  return { bodyStart: picked.join('\n'), rest };
+  return {
+    bodyStart: picked['body-start'].join('\n'),
+    rest,
+    bodyEnd: picked['body-end'].join('\n'),
+  };
 }

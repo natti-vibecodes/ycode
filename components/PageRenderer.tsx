@@ -1000,6 +1000,16 @@ export default async function PageRenderer({
         <CustomCodeInjector html={pageCustomCodeBody} />
       )}
 
+      {/* Global chrome that declared data-ycode-mount="body-end" — rendered HERE, AFTER the
+          page's own body code (SCA-1369). Pages whose content lives in the layer tree are
+          unaffected either way; pages that keep their content in custom code (the 20 case
+          studies, ~75 KB each with an empty layer tree) were serving NAV -> FOOTER -> CONTENT
+          until the footer could declare this. Opt-in: chrome that declares nothing stays in
+          `rest` above and nothing moves. */}
+      {mountedCustomCode.bodyEnd && (
+        <CustomCodeInjector html={mountedCustomCode.bodyEnd} />
+      )}
+
       {ycodeBadge && !isPreview && <YcodeBadge />}
     </>
   );

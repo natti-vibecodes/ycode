@@ -39,10 +39,20 @@ describe('splitCustomCodeByMount (SCA-1253)', () => {
   });
 
   test('a marker on a NESTED element is ignored — lifting it would be the DOM surgery we removed', () => {
+    // This test's NAME always said "ignored". Its assertions, until SCA-1369, pinned the exact
+    // opposite: that the nested child was lifted out and its parent left hollow. So the suite
+    // reported "nested is ignored ✔" while certifying that nested was lifted — a green test
+    // asserting the reverse of its own title, which is worse than no test, because it is read as
+    // proof. The module header made the same claim the title did, so two sources agreed with each
+    // other and neither agreed with the code.
+    //
+    // Corrected to the documented, safer rule: only a TOP-LEVEL element may declare a mount.
+    // Lifting a child out of its parent leaves `<div class="wrap"></div>` behind and silently
+    // breaks any `.wrap > .inner` selector.
     const html = `<div class="wrap"><div class="inner" ${MOUNT_ATTR}="body-start">x</div></div>`;
     const { bodyStart, rest } = splitCustomCodeByMount(html);
-    assert.equal(bodyStart, `<div class="inner" ${MOUNT_ATTR}="body-start">x</div>`);
-    assert.equal(rest, `<div class="wrap"></div>`);
+    assert.equal(bodyStart, '');
+    assert.equal(rest, html);
   });
 
   test('several declared chunks keep document order', () => {
@@ -79,5 +89,91 @@ describe('splitCustomCodeByMount (SCA-1253)', () => {
     const { bodyStart, rest } = splitCustomCodeByMount(html);
     assert.equal(bodyStart, '');
     assert.equal(rest, html);
+  });
+});
+
+/**
+ * SCA-1369 — the symmetric `body-end` mount.
+ *
+ * PageRenderer's order is: body-start global (nav) → layer tree → remaining global (footer) →
+ * page custom_code.body. That is correct for a page whose content lives in its LAYER TREE. The 20
+ * case-study pages keep ~75 KB of content in page custom code with an EMPTY layer tree, so they
+ * served NAV → FOOTER → CONTENT — the footer at the top of every case study.
+ *
+ * The fix is a mount the footer OPTS INTO, not a reordering of the two injectors: swapping global
+ * and page body code wholesale would silently change ordering on every page, including page-body
+ * scripts written assuming global code already ran.
+ */
+describe('body-end mount (SCA-1369)', () => {
+  const FOOTER = '<footer data-ycode-mount="body-end"><p>© Scalability</p></footer>';
+  const NAV = '<div class="navwrap" data-ycode-mount="body-start"><nav>n</nav></div>';
+
+  test('REGRESSION: THE opt-in property — code declaring nothing is byte-for-byte unmoved', () => {
+    // The whole safety case. If this fails, every page's script order changed to fix 20 pages.
+    const plain = '<div id="analytics"></div><script>init()</script>';
+    const out = splitCustomCodeByMount(plain);
+    assert.equal(out.rest, plain);
+    assert.equal(out.bodyStart, '');
+    assert.equal(out.bodyEnd, '');
+  });
+
+  test('a footer declaring body-end is lifted out of rest', () => {
+    const out = splitCustomCodeByMount(`<div id="a"></div>${FOOTER}`);
+    assert.equal(out.bodyEnd, FOOTER);
+    assert.equal(out.rest, '<div id="a"></div>');
+    assert.equal(out.bodyEnd.includes('Scalability'), true);
+  });
+
+  test('both mounts coexist, each landing in its own bucket', () => {
+    const out = splitCustomCodeByMount(`${NAV}<div id="mid"></div>${FOOTER}`);
+    assert.equal(out.bodyStart, NAV);
+    assert.equal(out.bodyEnd, FOOTER);
+    assert.equal(out.rest, '<div id="mid"></div>');
+  });
+
+  test('REGRESSION: a body-end chunk placed BEFORE a body-start one still routes correctly', () => {
+    // Scanning for one mount and then the other would consume these out of document order and
+    // put the footer's markup into `rest`.
+    const out = splitCustomCodeByMount(`${FOOTER}${NAV}`);
+    assert.equal(out.bodyEnd, FOOTER);
+    assert.equal(out.bodyStart, NAV);
+    assert.equal(out.rest.trim(), '');
+  });
+
+  test('multiple body-end chunks keep document order', () => {
+    const a = '<div data-ycode-mount="body-end">A</div>';
+    const b = '<div data-ycode-mount="body-end">B</div>';
+    assert.equal(splitCustomCodeByMount(a + b).bodyEnd, `${a}\n${b}`);
+  });
+
+  test('a NESTED declaration is ignored, as with body-start', () => {
+    // Only top-level elements may declare a mount; lifting a nested node out of its parent is
+    // the DOM surgery this whole mechanism exists to avoid.
+    const nested = '<div class="wrap"><footer data-ycode-mount="body-end">x</footer></div>';
+    const out = splitCustomCodeByMount(nested);
+    assert.equal(out.rest, nested);
+    assert.equal(out.bodyEnd, '');
+  });
+
+  test('an unclosed element is left alone rather than silently swallowed', () => {
+    const broken = '<footer data-ycode-mount="body-end">no closing tag';
+    const out = splitCustomCodeByMount(broken);
+    assert.equal(out.rest, broken);
+    assert.equal(out.bodyEnd, '');
+  });
+
+  test('an unknown mount value is not treated as body-end', () => {
+    const odd = '<div data-ycode-mount="body-middle">x</div>';
+    assert.equal(splitCustomCodeByMount(odd).rest, odd);
+    assert.equal(splitCustomCodeByMount(odd).bodyEnd, '');
+  });
+
+  test('empty and null input yield all three fields, not undefined', () => {
+    for (const input of ['', null, undefined]) {
+      const out = splitCustomCodeByMount(input);
+      assert.equal(out.bodyStart, '');
+      assert.equal(out.bodyEnd, '');
+      assert.equal(out.rest, '');
+    }
   });
 });
