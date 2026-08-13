@@ -36,10 +36,14 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     ".next-review/types/**/*.ts",
-    ".next-review/dev/types/**/*.ts"
+    ".next-review/dev/types/**/*.ts",
+    ".next-review-staging/types/**/*.ts",
+    ".next-review-staging/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    ".next-review-staging",
+    ".next-review-previous"
   ],
   "ts-node": {
     "compilerOptions": {
