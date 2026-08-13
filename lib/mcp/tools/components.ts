@@ -22,6 +22,7 @@ import {
   generateId,
 } from '@/lib/mcp/utils';
 import type { RichTextBlock } from '@/lib/mcp/utils';
+import { mergeAttributeMap } from '@/lib/layer-utils';
 import { buildComponentInstanceLayer, detachSpecificLayerFromComponent, isCircularComponentReference } from '@/lib/component-utils';
 import {
   cleanLayersForComponentCreation,
@@ -898,7 +899,9 @@ Pass variant_id to target a specific named variant; omit it to update the primar
           form_id: z.string().optional()
             .describe('For form layers: the id submissions are grouped under in the Forms screen.'),
           custom_attributes: z.record(z.string(), z.string()).optional()
-            .describe('Custom HTML attributes as { name: value }. REPLACES the existing map, so pass every attribute you want kept (including class).'),
+            .describe('Custom HTML attributes as { name: value }. REPLACES the existing map, so pass every attribute you want kept (including class). Wins over `attributes` on collision.'),
+          attributes: z.record(z.string(), z.string().nullable()).optional()
+            .describe("The element's own attributes — the field the renderer reads natively for images (`loading`, `sizes`, `width`, `height`) and media (`controls`, `autoplay`, `muted`, `loop`). MERGES, unlike custom_attributes: pass only what you are changing, and pass null as a value to DELETE a key. Merging is deliberate here because these attributes carry `src`/`width`/`height`, and a replace would silently wipe them."),
         }),
         z.object({
           type: z.literal('delete_layer'),
@@ -1109,11 +1112,29 @@ Pass variant_id to target a specific named variant; omit it to update the primar
                 if (op.tag !== undefined) settings.tag = op.tag;
                 if (op.html_id !== undefined) settings.html_id = op.html_id;
                 if (op.form_id !== undefined) settings.id = op.form_id;
-                // Replaces rather than merges, matching update_layer_settings on pages: a
-                // partial map would make removing an attribute impossible, and removing
-                // `onsubmit="return false;"` is exactly what a ported form needs.
+                // custom_attributes REPLACES. That was originally described as "matching
+                // update_layer_settings on pages", and SCA-1348 made that untrue — pages now
+                // merge and accept null to delete a key. The two are left deliberately different
+                // rather than quietly aligned: callers here rely on replace to strip
+                // `onsubmit="return false;"` from a ported form, and changing it under them would
+                // break that silently. Both describes now state their own semantics so neither is
+                // inferred from the other.
                 if (op.custom_attributes !== undefined) settings.customAttributes = op.custom_attributes;
-                return { ...l, settings } as typeof l;
+
+                // `attributes` lives on the LAYER, not in settings, and MERGES with null-delete —
+                // matching the page surface (SCA-1348). Merge rather than replace because these
+                // carry `src`, `width` and `height`; a replace to set `loading="eager"` would
+                // wipe the image. This is the op that was missing: a layer inside a component
+                // master could not have its loading/sizes/video attributes set at all (SCA-1361).
+                const nextAttributes = op.attributes !== undefined
+                  ? mergeAttributeMap(l.attributes as Record<string, string> | undefined, op.attributes)
+                  : (l.attributes as Record<string, string> | undefined);
+
+                return {
+                  ...l,
+                  settings,
+                  ...(op.attributes !== undefined ? { attributes: nextAttributes } : {}),
+                } as typeof l;
               });
               results.push({ op: i, status: 'ok', detail: `Updated settings on "${layer.customName || layer.name}"` });
               break;
