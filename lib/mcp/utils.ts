@@ -663,9 +663,14 @@ export const ELEMENT_TEMPLATES: Record<string, ElementTemplateEntry> = {
   text: {
     name: 'Text',
     description: 'Paragraph text',
-    template: textLayerTemplate('Text', 'p', {
-      typography: { isActive: true, fontSize: '16px' },
-    }, ['text-[16px]']),
+    // Born with NO typography at all (SCA-1332), so a new paragraph INHERITS the site's type
+    // scale instead of pinning itself to 16px. The old default stamped `fontSize: '16px'` plus a
+    // matching `text-[16px]` class onto every text layer ever created, which then quietly beat
+    // the design system: a hand-written rule like `.stmt{font-size:31px}` loses to a utility of
+    // equal specificity that appears later, so authored type silently rendered at 16px and looked
+    // like the stylesheet had failed. A layer that specifies nothing can be styled by anything;
+    // a layer born opinionated has to be fought.
+    template: textLayerTemplate('Text', 'p', {}, []),
   },
   image: {
     name: 'Image',
