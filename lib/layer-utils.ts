@@ -4513,3 +4513,71 @@ export function findLayersWithAnchorId(layers: Layer[]): Array<{ layer: Layer; i
 
   return result;
 }
+
+/**
+ * Resolve one HTML attribute for a layer, from either place it can live (SCA-1348).
+ *
+ * A layer carries attributes in TWO fields: `attributes` (the element's own, what the image path
+ * historically read) and `settings.customAttributes` (what the MCP tool can write). For a general
+ * element the renderer spreads `attributes` first and applies `customAttributes` after, so
+ * customAttributes wins on collision.
+ *
+ * The image path did not follow that rule — it read `layer.attributes.loading` directly, so a
+ * `loading` written through `customAttributes` was silently inert while the template's
+ * `attributes.loading="lazy"` kept winning. An attribute that applies on a <div> and is ignored
+ * on an <img> is the kind of inconsistency nobody can debug from the outside; a lane hit exactly
+ * that and could not explain why its write did nothing.
+ *
+ * This resolver IS that collision rule, in one place, so the two paths cannot drift again.
+ * Matching is case-insensitive because HTML attribute names are.
+ */
+export function resolveLayerAttribute(
+  layer: {
+    attributes?: Record<string, unknown> | null;
+    settings?: { customAttributes?: Record<string, string> | null } | null;
+  },
+  name: string,
+): string | undefined {
+  const wanted = name.toLowerCase();
+  const pick = (source: Record<string, unknown> | null | undefined) => {
+    if (!source) return undefined;
+    for (const [key, value] of Object.entries(source)) {
+      if (key.toLowerCase() !== wanted) continue;
+      if (value === null || value === undefined) return undefined;
+      return String(value);
+    }
+    return undefined;
+  };
+  // customAttributes last-wins, mirroring the render order for every other element.
+  return pick(layer.settings?.customAttributes) ?? pick(layer.attributes);
+}
+
+/**
+ * Merge an attribute patch into an existing map, where a `null` value DELETES the key (SCA-1348).
+ *
+ * A plain spread can only add or overwrite. That left the MCP surface unable to remove an
+ * attribute at all: a mistaken `loading="eager"` could be set to `""` — which still renders the
+ * attribute — but never actually taken off. Same shape as `isActive` before SCA-1336; a write API
+ * with no undo is half an API, and the half that's missing is the one you need when you're wrong.
+ *
+ * Returns undefined when the result is empty, so an emptied map doesn't persist as `{}`.
+ */
+export function mergeAttributeMap(
+  existing: Record<string, string> | undefined | null,
+  patch: Record<string, string | null>,
+): Record<string, string> | undefined {
+  const out: Record<string, string> = { ...(existing ?? {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) {
+      delete out[key];
+      // HTML attribute names are case-insensitive, so a delete must not miss a differently-cased
+      // key that the renderer would still emit.
+      for (const existingKey of Object.keys(out)) {
+        if (existingKey.toLowerCase() === key.toLowerCase()) delete out[existingKey];
+      }
+      continue;
+    }
+    out[key] = value;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}

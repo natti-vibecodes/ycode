@@ -15,6 +15,7 @@ import {
   applyBackgroundImageDesign,
 } from '@/lib/mcp/utils';
 import type { RichTextBlock } from '@/lib/mcp/utils';
+import { mergeAttributeMap } from '@/lib/layer-utils';
 import { layerToExportHtml } from '@/lib/html-layer-converter';
 import { collectFontFamiliesFromDesign, ensureFontsInstalled, fontWarnings } from '@/lib/mcp/font-install';
 import { getCachedLayers as getPageLayers, saveCachedLayers } from '@/lib/mcp/page-layers';
@@ -495,7 +496,10 @@ COMMON USES:
       tag: z.string().optional().describe('HTML tag override: h1, h2, h3, h4, h5, h6, p, span, div, section, nav, footer, header, main, aside, article'),
       html_id: z.string().optional().describe('Custom HTML element ID (for anchor links, CSS targeting)'),
       html_embed_code: z.string().optional().describe('For htmlEmbed layers: the HTML/CSS/JS code to embed. Runs in a sandboxed iframe on the published site — it cannot overlay the page or access the parent DOM'),
-      custom_attributes: z.record(z.string(), z.string()).optional().describe('Custom HTML attributes as { name: value } pairs'),
+      custom_attributes: z.record(z.string(), z.string().nullable()).optional()
+        .describe('Custom HTML attributes as { name: value } pairs. Pass null as a value to DELETE that attribute — merging alone can only overwrite, never remove. Wins over `attributes` on collision.'),
+      attributes: z.record(z.string(), z.string().nullable()).optional()
+        .describe("The element's own attributes — the field the renderer reads natively for images (`loading`, `sizes`, `width`, `height`). Same shape as custom_attributes; pass null to delete a key. Prefer custom_attributes unless you specifically need this field; it loses to custom_attributes on collision."),
       custom_name: z.string().optional().describe('Display name for the layer in the builder'),
       hidden: z.boolean().optional().describe('Hide the layer on the canvas (still renders on the published site).'),
       filter_on_change: z.boolean().optional().describe('For filter layers: trigger filtering on every input change (debounced).'),
@@ -557,7 +561,7 @@ COMMON USES:
       }).nullable().optional().describe('Bind a select / checkbox / radio element to a CMS collection. Pass null to clear.'),
     },
     async ({
-      page_id, layer_id, tag, html_id, html_embed_code, custom_attributes, custom_name,
+      page_id, layer_id, tag, html_id, html_embed_code, custom_attributes, attributes, custom_name,
       hidden, filter_on_change, is_placeholder, slider, lightbox, map, options_source,
     }) => {
       const layers = await getPageLayers(page_id);
@@ -573,8 +577,17 @@ COMMON USES:
         if (hidden !== undefined) settings.hidden = hidden;
         if (filter_on_change !== undefined) settings.filterOnChange = filter_on_change;
         if (is_placeholder !== undefined) settings.isPlaceholder = is_placeholder;
-        if (custom_attributes) settings.customAttributes = { ...settings.customAttributes, ...custom_attributes };
+        // A null value DELETES the key (SCA-1348). Merging alone could only overwrite, so a
+        // mistaken attribute could be blanked to "" but never actually removed — the same
+        // half-an-API shape as isActive before SCA-1336, where a write had no undo.
+        if (custom_attributes) settings.customAttributes = mergeAttributeMap(settings.customAttributes, custom_attributes);
         if (html_embed_code !== undefined) settings.htmlEmbed = { ...settings.htmlEmbed, code: html_embed_code };
+        // `attributes` lives on the layer, not in settings — it is the field the renderer reads
+        // natively for images. Exposed so a lane no longer has to fight an inert customAttributes
+        // write it cannot see the cause of.
+        const nextAttributes = attributes
+          ? mergeAttributeMap(l.attributes as Record<string, string> | undefined, attributes)
+          : (l.attributes as Record<string, string> | undefined);
         if (slider) {
           const existing = settings.slider || {} as Record<string, unknown>;
           settings.slider = {
@@ -653,6 +666,7 @@ COMMON USES:
         return {
           ...l,
           settings,
+          ...(attributes ? { attributes: nextAttributes } : {}),
           ...(custom_name ? { customName: custom_name } : {}),
         };
       });

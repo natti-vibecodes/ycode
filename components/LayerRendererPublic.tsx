@@ -16,7 +16,7 @@
 import React, { useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
 import dynamic from 'next/dynamic';
 import type { Layer, Locale, FormSettings, Component, DesignColorVariable, PasswordProtectionContext, DynamicTextVariable, DynamicRichTextVariable } from '@/types';
-import { getLayerHtmlTag, getClassesString, getText, resolveFieldValue, isTextContentLayer, getCollectionVariable, filterDisabledSliderLayers, applyCustomAttributes } from '@/lib/layer-utils';
+import { getLayerHtmlTag, getClassesString, getText, resolveFieldValue, isTextContentLayer, getCollectionVariable, filterDisabledSliderLayers, applyCustomAttributes, resolveLayerAttribute } from '@/lib/layer-utils';
 import { getMapIframeProps, DEFAULT_MAP_SETTINGS, resolveMarkerColor } from '@/lib/map-utils';
 import { HTML_TO_REACT_ATTRS } from '@/lib/parse-head-html';
 import { FORM_SUCCESS_EVENT, FORM_ERROR_EVENT, buildFormEventDetail, dispatchFormEvent } from '@/lib/form-events';
@@ -1064,7 +1064,9 @@ const LayerItem: React.FC<{
       }
 
       const isLcpCandidate = !!lcpCandidateLayerId && layer.id === lcpCandidateLayerId;
-      const imgLoadingAttr = layer.attributes?.loading as string | undefined;
+      // Resolved from customAttributes OR attributes (SCA-1348) — reading only `attributes`
+      // here is what made a customAttributes `loading` write silently inert on images.
+      const imgLoadingAttr = resolveLayerAttribute(layer, 'loading');
       // LCP candidate always loads eagerly with high fetchpriority — overrides
       // the image template's default `loading="lazy"`. Other images keep
       // whatever the user/template set.
@@ -1076,7 +1078,7 @@ const LayerItem: React.FC<{
       // intrinsic pixel width, emit a media-aware sizes string so browsers
       // download a more appropriately sized variant on desktop. Falls back
       // to `100vw` when width is unknown.
-      const explicitSizes = (layer.attributes?.sizes as string | undefined)?.trim();
+      const explicitSizes = resolveLayerAttribute(layer, 'sizes')?.trim();
       const intrinsicWidth = parseImageDimension(imgWidth);
       const intrinsicHeight = parseImageDimension(imgHeight);
       // `sizes=auto` only applies to lazy images, so pass whether this one is lazy.
