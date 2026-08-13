@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Keeps the :3003 review-server watcher alive across sessions (SCA-1347).
+
+  The watcher removes the human step between a press and a truthful review surface, but it has
+  only ever run as a child of one chat session — so it died whenever that session ended, silently.
+  The failure mode is staleness, not breakage, which is precisely the kind that goes unnoticed:
+  lanes keep reading :3003 and it keeps answering, just with older content. That is the situation
+  the watcher exists to prevent, so it should not depend on a session being open.
+
+  INSTALL (Natalia or anyone with permission — one command):
+      launchctl bootstrap gui/$(id -u) ~/ycode/scripts/com.scalability.ycode-review-watch.plist
+  STOP:
+      launchctl bootout gui/$(id -u)/com.scalability.ycode-review-watch
+  STATUS:
+      launchctl print gui/$(id -u)/com.scalability.ycode-review-watch | head -20
+
+  KeepAlive restarts it if it exits for any reason. RunAtLoad starts it at login. It writes to
+  /tmp/ycode-review-watch.log, the same file the manual run uses, so nothing that reads that log
+  needs to know which way it was started.
+
+  NOTE: this watches and rebuilds only. It never publishes, and it cannot — the rebuild path is
+  `next build` against a separate dist dir, and PUBLISH_ALLOWED is not set in this environment.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.scalability.ycode-review-watch</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/nataliaodrinskaya/ycode/scripts/review-watch.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/nataliaodrinskaya/ycode</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- The rebuild shells out to `next`, which lives in node_modules/.bin. launchd does not
+       inherit a login shell's PATH, so it is stated explicitly here — the same omission broke
+       the watcher's first real firing when it ran as a plain subprocess. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/nataliaodrinskaya/ycode/node_modules/.bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/ycode-review-watch.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/ycode-review-watch.log</string>
+
+  <!-- Throttle so a crash-loop cannot spin: 30s between restarts. -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+</dict>
+</plist>

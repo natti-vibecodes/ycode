@@ -30,6 +30,14 @@ Safety properties, each earned tonight:
     rather than ~35s of confidently wrong content.
 
 Usage:  npm run review:watch          (foreground, Ctrl-C to stop)
+
+DURABILITY: run as a chat session's child and it dies with that session — silently, because the
+failure mode is staleness rather than breakage: lanes keep reading :3003 and it keeps answering,
+just with older content. That is exactly what this exists to prevent, so it should not depend on
+a session being open. scripts/com.scalability.ycode-review-watch.plist runs it under launchd with
+KeepAlive; install with
+
+    launchctl bootstrap gui/$(id -u) ~/ycode/scripts/com.scalability.ycode-review-watch.plist
 """
 
 import hashlib
