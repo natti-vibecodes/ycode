@@ -74,8 +74,22 @@ export async function getSupabaseAdmin(tenantId?: string): Promise<SupabaseClien
     return globalForSupabase.__supabaseClient;
   }
 
+  // Every Supabase request gets a deadline. A publish once hung for 16.7 MINUTES on a single
+  // fetch that never returned, holding the connection and — because it died before the cache
+  // step — leaving published data behind stale renders (SCA-1334). A hang must fail fast enough
+  // to hit the error path while someone is still watching.
+  //
+  // Generous on purpose: individual Supabase REST calls are sub-second in practice, so 60s only
+  // ever fires on a genuine hang, never on a slow-but-working query. Tunable for the rare bulk
+  // operation that legitimately needs longer.
+  const timeoutMs = Number(process.env.SUPABASE_FETCH_TIMEOUT_MS) || 60_000;
   const limitedFetch: typeof globalThis.fetch = (input, init) =>
-    withLimit(() => globalThis.fetch(input, init));
+    withLimit(() => {
+      const deadline = AbortSignal.timeout(timeoutMs);
+      // Compose rather than replace: a caller-supplied signal must still be able to cancel.
+      const signal = init?.signal ? AbortSignal.any([init.signal, deadline]) : deadline;
+      return globalThis.fetch(input, { ...init, signal });
+    });
 
   globalForSupabase.__supabaseClient = createClient(creds.projectUrl, creds.serviceRoleKey, {
     auth: {

@@ -138,6 +138,13 @@ export async function POST(request: NextRequest) {
     return noCache({ error: publishBlockedMessage('ui') }, 403);
   }
 
+  // Cache invalidation must be guaranteed once ANY published row has been written — the publish
+  // steps are not a transaction, and invalidation used to live only on the success path, so a
+  // mid-publish failure left live data behind pre-publish renders indefinitely (SCA-1334).
+  // `dataWritten` gates the finally so a blocked or no-op publish never needlessly nukes caches.
+  let dataWritten = false;
+  let cacheInvalidated = false;
+
   try {
     const body: PublishRequest = await request.json().catch(() => ({}));
 
@@ -204,6 +211,7 @@ export async function POST(request: NextRequest) {
     // Publish folders first (pages depend on them)
     {
       const stepStart = performance.now();
+      dataWritten = true;
       const foldersResult = await publishFolders(
         isPublishingAll ? [] : (folderIds || []),
         pageIds
@@ -892,9 +900,10 @@ export async function POST(request: NextRequest) {
           `[Cache] warming ${warmResult.warmed}${warmResult.total > warmResult.warmed ? ` of ${warmResult.total}` : ''} route(s) in background`,
         );
       }
+      cacheInvalidated = true;
     } catch {
       // Fallback: if selective invalidation fails, nuke everything
-      try { await clearAllCache(); } catch { /* non-fatal */ }
+      try { await clearAllCache(); cacheInvalidated = true; } catch { /* non-fatal */ }
     }
 
     // Save published timestamp to settings
@@ -951,6 +960,7 @@ export async function POST(request: NextRequest) {
     try {
       await clearAllCache();
       cachesCleared = true;
+      cacheInvalidated = true;
     } catch {
       // Non-fatal, but the caller must be told: see the flag in the response.
     }
@@ -966,5 +976,18 @@ export async function POST(request: NextRequest) {
       },
       500
     );
+  } finally {
+    // Last line of defence. Covers any exit this function grows later — an early return, a
+    // throw from the error handler itself — that would otherwise skip invalidation after data
+    // was already written. Idempotent: over-clearing costs a cold cache, under-clearing serves
+    // wrong content with every signal green.
+    if (dataWritten && !cacheInvalidated) {
+      try {
+        await clearAllCache();
+        console.warn('[publish] caches cleared by the safety net — an exit path skipped invalidation');
+      } catch {
+        console.error('[publish] data was written and caches could NOT be cleared — served pages may be stale');
+      }
+    }
   }
 }
