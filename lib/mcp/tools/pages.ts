@@ -127,22 +127,26 @@ DRAFT STATUS: Set is_publishable to false to keep the page as a draft that is sk
     'update_page_settings',
     `Update page SEO, custom code, password protection, or CMS binding (dynamic pages).
 
-SEO: Set title, description, noindex, and OG image (asset ID).
-Custom code: Inject HTML into <head> or before </body>.
+SEO: Set title, description, noindex, and OG image (asset ID). On dynamic pages, bind CMS
+fields in title/description with <ycode-inline-variable> tags (same format as set_dynamic_text).
+Custom code: Inject HTML into <head> or before </body>. On dynamic pages, bind CMS fields
+with {{FieldName}} placeholders (exact collection field names) — NOT <ycode-inline-variable>.
+Use this for per-item JSON-LD (BlogPosting, BreadcrumbList, etc.). Image/file fields resolve
+to their URL; references support {{Reference.NestedField}}.
 Password protection: Enable/disable with a password.
 CMS binding: For dynamic pages — bind to a collection, pick the slug field, and configure
 how next-item / previous-item links traverse the collection.`,
     {
       page_id: z.string().describe('The page ID'),
       seo: z.object({
-        title: z.string().optional().describe('SEO title (appears in browser tab and search results)'),
-        description: z.string().optional().describe('SEO meta description'),
+        title: z.string().optional().describe('SEO title (appears in browser tab and search results). On dynamic pages, bind fields with <ycode-inline-variable> tags — not {{FieldName}}.'),
+        description: z.string().optional().describe('SEO meta description. On dynamic pages, bind fields with <ycode-inline-variable> tags — not {{FieldName}}.'),
         noindex: z.boolean().optional().describe('Prevent search engines from indexing this page'),
         image_asset_id: z.string().nullable().optional().describe('OG image asset ID for social sharing'),
       }).optional(),
       custom_code: z.object({
-        head: z.string().optional().describe('HTML to inject into <head> (e.g. analytics scripts)'),
-        body: z.string().optional().describe('HTML to inject before </body>'),
+        head: z.string().optional().describe('HTML to inject into <head> (analytics, JSON-LD, meta tags). On dynamic pages use {{FieldName}} for CMS values — never <ycode-inline-variable>.'),
+        body: z.string().optional().describe('HTML to inject before </body>. On dynamic pages use {{FieldName}} for CMS values — never <ycode-inline-variable>.'),
       }).optional(),
       auth: z.object({
         enabled: z.boolean().describe('Enable or disable password protection'),
