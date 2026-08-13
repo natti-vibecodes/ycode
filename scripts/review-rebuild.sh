@@ -28,6 +28,19 @@ PREVIOUS=".next-review-previous"
 
 cd "$(dirname "$0")/.."
 
+# The dirs this script creates MUST be gitignored. Tailwind v4 auto-detects sources and skips
+# only gitignored paths, so an un-ignored build output gets scanned, its compiled CSS ingested as
+# class candidates, and the generated stylesheet can come out unparseable — which 500s every route
+# on the DEV server, with an error naming an innocent source file. That is exactly what shipping
+# this script without a .gitignore update did on 2026-08-13. Assert it rather than remember it.
+for dir in "$STAGING" "$PREVIOUS"; do
+  if ! git check-ignore -q "$dir" 2>/dev/null; then
+    echo "!! $dir is NOT gitignored. Tailwind will scan it and can emit an unparseable" >&2
+    echo "!! stylesheet that 500s every route on :3002. Add '.next-review*' to .gitignore." >&2
+    exit 1
+  fi
+done
+
 echo "==> [1/4] Building into $STAGING (live server untouched, still serving $LIVE)"
 rm -rf "$STAGING"
 NEXT_DIST_DIR="$STAGING" next build
