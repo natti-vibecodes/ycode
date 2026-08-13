@@ -1,6 +1,7 @@
 import { getSupabaseAdmin, getTenantIdFromHeaders } from '@/lib/supabase-server';
 import { getKnexClient } from '@/lib/knex-client';
 import { SUPABASE_IN_FILTER_CHUNK_SIZE } from '@/lib/supabase-constants';
+import { getCollectionContentFingerprints } from '@/lib/repositories/collectionItemValueRepository';
 import type { Collection, CreateCollectionData, UpdateCollectionData } from '@/types';
 import { randomUUID } from 'crypto';
 
@@ -438,8 +439,15 @@ export async function publishCollection(id: string): Promise<Collection> {
 
 }
 
-/** Check if draft collection metadata differs from published */
-function hasCollectionChanged(draft: Collection, published: Collection): boolean {
+/**
+ * Check if draft collection METADATA differs from published.
+ *
+ * Metadata only — deliberately. Content lives in items and values, which this cannot see; the
+ * caller folds that in via content fingerprints. Named to say so, because the previous name plus
+ * a `getUnpublishedCollections` that called nothing else is what made CMS edits invisible to the
+ * publish queue for as long as they were (SCA-1278).
+ */
+function hasCollectionMetadataChanged(draft: Collection, published: Collection): boolean {
   return (
     draft.name !== published.name ||
     draft.order !== published.order
@@ -480,12 +488,33 @@ export async function getUnpublishedCollections(): Promise<Collection[]> {
   const publishedById = new Map<string, Collection>();
   (publishedCollections || []).forEach(c => publishedById.set(c.id, c));
 
+  // Content fingerprints: item membership + every item value, aggregated in the database
+  // (SCA-1278). Without these, a collection whose ITEMS changed but whose name and order did not
+  // reported as fully published — which is how 24 changed values sat in a queue that said
+  // "nothing pending".
+  //
+  // A failure here reports every collection as unpublished rather than none. Over-reporting costs
+  // a redundant publish of already-identical rows; under-reporting is the bug being fixed, and it
+  // is silent.
+  let draftFingerprints: Map<string, string>;
+  let publishedFingerprints: Map<string, string>;
+  try {
+    [draftFingerprints, publishedFingerprints] = await Promise.all([
+      getCollectionContentFingerprints(false),
+      getCollectionContentFingerprints(true),
+    ]);
+  } catch (err) {
+    console.error('[collections] content fingerprint failed; reporting all collections as unpublished:', err);
+    return draftCollections;
+  }
+
   return draftCollections.filter(draft => {
     const published = publishedById.get(draft.id);
     if (!published) {
       return true; // Never published
     }
-    return hasCollectionChanged(draft, published);
+    if (hasCollectionMetadataChanged(draft, published)) return true;
+    return draftFingerprints.get(draft.id) !== publishedFingerprints.get(draft.id);
   });
 }
 

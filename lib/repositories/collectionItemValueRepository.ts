@@ -826,3 +826,63 @@ export async function publishValues(item_id: string): Promise<number> {
 export function castValueByType(value: string | null, type: CollectionFieldType): any {
   return castValue(value, type);
 }
+
+/**
+ * Content fingerprint per collection: item membership plus every item value (SCA-1278).
+ *
+ * `getUnpublishedCollections` compared only a collection's `name` and `order`, so CMS content
+ * edits were invisible to `get_unpublished_changes` entirely — 24 changed values across 6 items
+ * were pending on 2026-08-13 and the queue reported nothing. A full press ships them anyway
+ * (publish-all iterates every collection rather than the diff), so this was a reporting lie
+ * rather than lost work — but every lane uses that queue to decide whether their work is
+ * pending, so "the queue is empty" was quietly untrustworthy for anything CMS-shaped.
+ *
+ * Aggregated in the database rather than by fetching every row into memory: a large collection
+ * would otherwise pull its entire value table twice on every queue check.
+ *
+ * Item membership is folded in so that adding or removing an item — or flipping is_publishable,
+ * which decides whether it serves — registers even when no value changed.
+ */
+export async function getCollectionContentFingerprints(
+  isPublished: boolean,
+  tenantId?: string,
+): Promise<Map<string, string>> {
+  const knex = await getKnexClient();
+  const resolvedTenantId = tenantId ?? await getTenantIdFromHeaders();
+
+  const valueRows = knex('collection_item_values as civ')
+    .join('collection_items as ci', 'ci.id', 'civ.item_id')
+    .where('civ.is_published', isPublished)
+    .whereNull('civ.deleted_at')
+    .whereNull('ci.deleted_at')
+    .groupBy('ci.collection_id')
+    .select('ci.collection_id')
+    .select(knex.raw(
+      "md5(string_agg(civ.item_id || ':' || civ.field_id || '=' || coalesce(civ.value, ''), '|' order by civ.item_id, civ.field_id)) as fp",
+    ));
+
+  const itemRows = knex('collection_items')
+    .where('is_published', isPublished)
+    .whereNull('deleted_at')
+    .groupBy('collection_id')
+    .select('collection_id')
+    .select(knex.raw(
+      "md5(string_agg(id || ':' || coalesce(is_publishable, false)::text || ':' || coalesce(manual_order, 0)::text, '|' order by id)) as fp",
+    ));
+
+  if (resolvedTenantId) {
+    valueRows.where('civ.tenant_id', resolvedTenantId);
+    itemRows.where('tenant_id', resolvedTenantId);
+  }
+
+  const [values, items] = await Promise.all([valueRows, itemRows]);
+
+  const out = new Map<string, string>();
+  for (const row of items as Array<{ collection_id: string; fp: string }>) {
+    out.set(row.collection_id, `i:${row.fp}`);
+  }
+  for (const row of values as Array<{ collection_id: string; fp: string }>) {
+    out.set(row.collection_id, `${out.get(row.collection_id) ?? 'i:none'}|v:${row.fp}`);
+  }
+  return out;
+}
