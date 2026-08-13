@@ -19,6 +19,9 @@ set -euo pipefail
 PORT=3002
 cd "$(dirname "$0")/.."
 
+# Same reason as review-rebuild.sh: `next` is only on PATH under `npm run`.
+export PATH="$PWD/node_modules/.bin:$PATH"
+
 echo "==> [1/3] Stopping :$PORT"
 if PIDS=$(lsof -ti:$PORT 2>/dev/null) && [ -n "$PIDS" ]; then
   # Only kill things that are actually the dev server — browsers and helper processes hold

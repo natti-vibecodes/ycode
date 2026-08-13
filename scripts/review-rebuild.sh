@@ -28,6 +28,12 @@ PREVIOUS=".next-review-previous"
 
 cd "$(dirname "$0")/.."
 
+# `next` lives in node_modules/.bin, which npm puts on PATH for `npm run` — but NOT when this
+# script is invoked directly, as the watcher does. Without this the watcher's rebuild died with
+# "next: command not found" while npm run review:rebuild worked fine, so the failure only appeared
+# once something other than a human ran it.
+export PATH="$PWD/node_modules/.bin:$PATH"
+
 # The dirs this script creates MUST be gitignored. Tailwind v4 auto-detects sources and skips
 # only gitignored paths, so an un-ignored build output gets scanned, its compiled CSS ingested as
 # class candidates, and the generated stylesheet can come out unparseable — which 500s every route
