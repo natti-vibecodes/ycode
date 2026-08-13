@@ -76,7 +76,17 @@ export function buildComponentDependencyGraph(
   const graph = new Map<string, Set<string>>();
 
   for (const component of components) {
-    const dependencies = collectComponentIds(component.layers || []);
+    // Components store their tree in `variants[].layers`; the top-level `layers` is a legacy
+    // field that MCP writes never update (update_component_layers saves `variants` only), so it
+    // drifts stale the moment a component is edited by an agent. Reading only it made this graph
+    // EMPTY for variant-based components — which silently disabled indirect cycle detection while
+    // the direct self-reference check above kept passing, so the guard looked like it worked
+    // (SCA-1358). Every variant is scanned, not just the primary: a cycle reachable through any
+    // variant is still a non-terminating render.
+    const treeLayers = (component.variants && component.variants.length > 0)
+      ? component.variants.flatMap((v) => v.layers ?? [])
+      : (component.layers ?? []);
+    const dependencies = collectComponentIds(treeLayers);
 
     // Also scan variable default values for embedded components
     if (component.variables) {

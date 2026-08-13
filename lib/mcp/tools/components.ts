@@ -22,7 +22,7 @@ import {
   generateId,
 } from '@/lib/mcp/utils';
 import type { RichTextBlock } from '@/lib/mcp/utils';
-import { buildComponentInstanceLayer, detachSpecificLayerFromComponent } from '@/lib/component-utils';
+import { buildComponentInstanceLayer, detachSpecificLayerFromComponent, isCircularComponentReference } from '@/lib/component-utils';
 import {
   cleanLayersForComponentCreation,
   regenerateIdsWithInteractionRemapping,
@@ -171,6 +171,87 @@ Use replace_layer_with_component instead when swapping an existing layer for a c
             message: `Added "${component.name}" component instance to page`,
             layer_id: instance.id,
             parent_layer_id,
+          }),
+        }],
+      };
+    },
+  );
+
+  server.tool(
+    'add_component_instance_to_component',
+    `Nest one component inside ANOTHER COMPONENT's master tree (SCA-1358).
+
+\`add_component_instance\` puts an instance on a PAGE. This is its counterpart for building a
+component out of other components — e.g. a "Card grid" whose children are "Card" instances, so
+editing Card updates every grid that uses it.
+
+The engine has always supported nesting (the renderer resolves nested instances recursively and
+the builder UI allows it); only this MCP op was missing, so agents had to inline a copy of the
+child's markup instead — which then silently stops tracking the child component.
+
+A cycle is refused server-side: a component cannot contain itself, directly or through any chain
+of other components. That check runs here rather than being left to the caller.`,
+    {
+      component_id: z.string().describe('The component being edited — the CONTAINER that receives the instance'),
+      parent_layer_id: z.string().describe('ID of the layer inside that component to insert into'),
+      child_component_id: z.string().describe('ID of the component to nest INSIDE it'),
+      position: z.number().optional().describe('Index within parent children. Omit to append at end.'),
+      variant_id: z.string().optional().describe('Variant of the CONTAINER to modify. Omit to target the primary variant.'),
+      child_variant_id: z.string().optional().describe('Variant of the NESTED component to instantiate. Omit for its primary variant.'),
+      custom_name: z.string().optional().describe('Display name for the instance layer. Defaults to the child component name.'),
+    },
+    async ({ component_id, parent_layer_id, child_component_id, position, variant_id, child_variant_id, custom_name }) => {
+      const component = await getComponentById(component_id);
+      if (!component) {
+        return { content: [{ type: 'text' as const, text: `Error: Component "${component_id}" not found.` }], isError: true };
+      }
+      const child = await getComponentById(child_component_id);
+      if (!child) {
+        return { content: [{ type: 'text' as const, text: `Error: Component "${child_component_id}" not found.` }], isError: true };
+      }
+
+      // Cycle guard, server-side and before any write. Uses the same check the builder UI uses,
+      // so the two surfaces cannot disagree about what nesting is legal.
+      const allComponents = await getAllComponents();
+      if (isCircularComponentReference(component_id, child_component_id, allComponents)) {
+        return {
+          content: [{ type: 'text' as const, text: `Error: nesting "${child.name}" inside "${component.name}" would create a circular reference — the render would never terminate. A component cannot contain itself, directly or through a chain of other components.` }],
+          isError: true,
+        };
+      }
+
+      const variants: ComponentVariant[] = (component.variants && component.variants.length > 0)
+        ? component.variants
+        : [{ id: generateId(), name: 'Default', layers: component.layers ?? [] }];
+      const targetIdx = variant_id ? variants.findIndex((v) => v.id === variant_id) : 0;
+      if (targetIdx === -1) {
+        return { content: [{ type: 'text' as const, text: `Error: Variant "${variant_id}" not found on "${component.name}".` }], isError: true };
+      }
+
+      const layers = variants[targetIdx].layers ?? [];
+      const parent = findLayerById(layers, parent_layer_id);
+      if (!parent) {
+        return { content: [{ type: 'text' as const, text: `Error: Layer "${parent_layer_id}" not found inside "${component.name}"${variant_id ? ` (variant "${variant_id}")` : ''}.` }], isError: true };
+      }
+      if (!canHaveChildren(parent)) {
+        return { content: [{ type: 'text' as const, text: `Error: "${parent.customName || parent.name}" cannot have children.` }], isError: true };
+      }
+
+      const instance = buildComponentInstanceLayer(child, { variantId: child_variant_id, customName: custom_name });
+      const updatedLayers = insertLayer(layers, parent_layer_id, instance, position);
+      const updatedVariants = variants.map((v, i) => (i === targetIdx ? { ...v, layers: updatedLayers } : v));
+      await updateComponent(component_id, { variants: updatedVariants });
+      broadcastComponentLayersUpdated(component_id, updatedVariants[0].layers).catch(() => {});
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({
+            message: `Nested "${child.name}" inside "${component.name}"`,
+            layer_id: instance.id,
+            parent_layer_id,
+            container_component_id: component_id,
+            child_component_id,
           }),
         }],
       };
