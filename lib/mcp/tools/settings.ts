@@ -1,7 +1,10 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { isAgentSecretSettingKey } from '@/lib/agent/config';
-import { getAllSettings, getSettingByKey, setSetting, setSettings } from '@/lib/repositories/settingsRepository';
+import { getAllSettings, getSettingByKey, setSettings } from '@/lib/repositories/settingsRepository';
+import { setSettingAndInvalidate } from '@/lib/services/settingsService';
+import { isDraftOnlySettingKey } from '@/lib/settings-keys';
+import { clearAllCache } from '@/lib/services/cacheService';
 
 export function registerSettingsTools(server: McpServer) {
   server.tool(
@@ -42,11 +45,18 @@ export function registerSettingsTools(server: McpServer) {
       value: z.unknown().describe('Setting value (string, number, boolean, or object)'),
     },
     async ({ key, value }) => {
-      const setting = await setSetting(key, value);
+      // Invalidates the public cache for render-affecting keys, exactly as the HTTP route does
+      // (SCA-1345). Writing the setting alone leaves cached pages serving the old value with no
+      // signal that anything is stale — which is how every chrome sync silently failed to reach
+      // already-published pages.
+      await setSettingAndInvalidate(key, value);
       return {
         content: [{
           type: 'text' as const,
-          text: JSON.stringify({ message: `Setting "${key}" saved`, setting }, null, 2),
+          text: JSON.stringify({
+            message: `Setting "${key}" saved`,
+            cache_invalidated: !isDraftOnlySettingKey(key),
+          }, null, 2),
         }],
       };
     },
@@ -60,10 +70,18 @@ export function registerSettingsTools(server: McpServer) {
     },
     async ({ settings }) => {
       const count = await setSettings(settings);
+      // Same gap as set_setting, and worse here — a batch is exactly how a whole chrome sync
+      // lands. One purge covers the batch; per-key purging would nuke the cache N times.
+      const invalidated = Object.keys(settings).some((k) => !isDraftOnlySettingKey(k));
+      if (invalidated) await clearAllCache();
       return {
         content: [{
           type: 'text' as const,
-          text: JSON.stringify({ message: `Updated ${count} setting(s)`, count }, null, 2),
+          text: JSON.stringify({
+            message: `Updated ${count} setting(s)`,
+            count,
+            cache_invalidated: invalidated,
+          }, null, 2),
         }],
       };
     },

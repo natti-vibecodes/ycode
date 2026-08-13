@@ -1,35 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isAgentSecretSettingKey } from '@/lib/agent/config';
-import { getSettingByKey, setSetting } from '@/lib/repositories/settingsRepository';
-import { clearAllCache, getAllPublishedRoutes, warmRoutes } from '@/lib/services/cacheService';
-
-/**
- * Setting keys that don't affect public-page rendering and therefore should
- * NOT trigger a cache nuke when updated.
- *
- * - `draft_css`: builder-only preview CSS. Public pages serve `published_css`.
- *   Saved on every edit, so invalidating here would purge every page on every
- *   keystroke and undo selective invalidation entirely.
- * - `email`: SMTP credentials for form submission backend. Not consumed by
- *   public page renders.
- * - `ai_*`: AI builder configuration (API key, model choices). Builder-only.
- *
- * All other keys (redirects, favicon_url, ga_measurement_id, published_css,
- * color variables, etc.) are read by public pages and DO require invalidation.
- */
-const DRAFT_ONLY_SETTING_KEYS = new Set([
-  'draft_css',
-  'email',
-  'ai_model',
-  'ai_enabled_models',
-  'ai_agent_enabled',
-]);
-
-/** Builder-only keys that must not purge the public cache. Agent secrets
- * (shared and per-user) are covered by isAgentSecretSettingKey. */
-function isDraftOnlySettingKey(key: string): boolean {
-  return DRAFT_ONLY_SETTING_KEYS.has(key) || isAgentSecretSettingKey(key);
-}
+import { getSettingByKey } from '@/lib/repositories/settingsRepository';
+import { setSettingAndInvalidate } from '@/lib/services/settingsService';
 
 /**
  * GET /ycode/api/settings/[key]
@@ -90,29 +62,10 @@ export async function PUT(
       );
     }
 
-    await setSetting(key, value);
-
-    // Skip cache invalidation for draft/internal settings so builder
-    // autosaves don't purge the public CDN cache on every edit.
-    if (!isDraftOnlySettingKey(key)) {
-      await clearAllCache();
-
-      // Prime the cache so the first visit to any public page after this
-      // settings change doesn't pay the cold-cache cost. warmRoutes batches
-      // and self-chains through every route up to the overall cap; anything
-      // beyond that self-warms on first real visit.
-      try {
-        const routes = await getAllPublishedRoutes();
-        const warmResult = await warmRoutes(routes, request);
-        if (warmResult) {
-          console.log(
-            `[Cache] settings (${key}): warming ${warmResult.warmed}${warmResult.total > warmResult.warmed ? ` of ${warmResult.total}` : ''} route(s) in background`,
-          );
-        }
-      } catch {
-        // Non-fatal: warming is an optimization
-      }
-    }
+    // Writes, then purges the public cache for render-affecting keys and warms the routes back
+    // up. Shared with the MCP `set_setting` tool (SCA-1345) — this logic living only here is
+    // exactly why agent-written settings never invalidated anything.
+    await setSettingAndInvalidate(key, value, request);
 
     return NextResponse.json({
       data: { key, value },

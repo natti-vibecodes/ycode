@@ -175,3 +175,41 @@ export function estimateCostUsd(model: string, usage: TokenUsageBreakdown): numb
       usage.cacheReadTokens * pricing.cacheRead) / 1_000_000
   );
 }
+
+/**
+ * Settings keys holding each provider's API key.
+ *
+ * Lives here rather than in config.ts because it is pure data with no server-only dependency,
+ * and `isAgentSecretSettingKey` below is needed by the settings cache-invalidation classifier
+ * (lib/settings-keys.ts), which must stay importable from anywhere. config.ts re-exports all
+ * four names, so existing imports are unaffected.
+ */
+export const PROVIDER_KEY_SETTINGS: Record<AgentProviderId, string> = {
+  anthropic: 'ai_anthropic_api_key',
+  openai: 'ai_openai_api_key',
+  google: 'ai_google_api_key',
+  xai: 'ai_xai_api_key',
+};
+
+/** All settings keys that store a provider secret. */
+export const AI_SECRET_SETTING_KEYS: string[] = Object.values(PROVIDER_KEY_SETTINGS);
+
+/**
+ * True for any settings key holding a provider secret — shared ("ai_anthropic_api_key") or
+ * per-user ("ai_anthropic_api_key:<userId>"). Use this instead of exact-match checks wherever
+ * secrets must be filtered.
+ */
+export function isAgentSecretSettingKey(key: string): boolean {
+  return AI_SECRET_SETTING_KEYS.some(
+    (secret) => key === secret || key.startsWith(`${secret}:`),
+  );
+}
+
+/**
+ * Settings key holding a user's personal (only-me) key for a provider. Shared project keys live
+ * at the plain PROVIDER_KEY_SETTINGS key; personal keys are suffixed with the owner's user id and
+ * shadow the shared key for that user only.
+ */
+export function personalKeySetting(provider: AgentProviderId, userId: string): string {
+  return `${PROVIDER_KEY_SETTINGS[provider]}:${userId}`;
+}

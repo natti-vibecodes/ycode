@@ -5,6 +5,8 @@
  */
 
 import { getSettingsByKeys, setSetting } from '@/lib/repositories/settingsRepository';
+import { isDraftOnlySettingKey } from '@/lib/settings-keys';
+import { clearAllCache, getAllPublishedRoutes, warmRoutes } from '@/lib/services/cacheService';
 import type { Setting } from '@/types';
 
 /**
@@ -47,4 +49,46 @@ export const publishCSS = () => syncCSS('publish');
  */
 export async function savePublishedAt(timestamp: string): Promise<Setting> {
   return await setSetting('published_at', timestamp);
+}
+
+/**
+ * Write a setting and invalidate the public cache when the key affects rendering.
+ *
+ * SHARED ON PURPOSE (SCA-1345). Global settings are resolved at RENDER time —
+ * `app/(site)/layout.tsx` reads `custom_code_head` live, and the settings table has no
+ * draft/published pair — so a written setting is live for any page that re-renders, and cached
+ * pages keep the old value until something invalidates them.
+ *
+ * The HTTP route did this invalidation; the MCP `set_setting` tool called the repository
+ * directly and did not. `tools/ycode/sync-chrome.py` writes the global head through that tool,
+ * so every chrome sync left the route cache stale — new CSS reached only pages that happened to
+ * re-render for some other reason. A publish does not rescue it either: `globalChanged` in the
+ * publish route keys on the colour-variable hash and global variables, not on custom code, so
+ * selective invalidation skips every page whose own content didn't change.
+ *
+ * `warmRoutes` needs a Request and is a Vercel-only optimisation, so callers without one (MCP)
+ * skip warming. Invalidation is the correctness half; warming is not.
+ */
+export async function setSettingAndInvalidate(
+  key: string,
+  value: unknown,
+  request?: Request,
+): Promise<void> {
+  await setSetting(key, value);
+  if (isDraftOnlySettingKey(key)) return;
+
+  await clearAllCache();
+
+  if (!request) return;
+  try {
+    const routes = await getAllPublishedRoutes();
+    const warmResult = await warmRoutes(routes, request);
+    if (warmResult) {
+      console.log(
+        `[Cache] settings (${key}): warming ${warmResult.warmed}${warmResult.total > warmResult.warmed ? ` of ${warmResult.total}` : ''} route(s) in background`,
+      );
+    }
+  } catch {
+    // Non-fatal: warming is an optimisation.
+  }
 }

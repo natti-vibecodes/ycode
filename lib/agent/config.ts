@@ -1,4 +1,12 @@
 import { AGENT_MODELS, AGENT_PROVIDERS, DEFAULT_AGENT_MODEL, providerOfModel } from '@/lib/agent/models';
+// Re-exported so every existing `from '@/lib/agent/config'` import keeps working; the definitions
+// moved to models.ts (no server-only deps) so lib/settings-keys.ts can use them. Imported as well
+// as re-exported — `export { … } from` does not bind the names in this module's own scope, and
+// the resolution logic below uses all four.
+import {
+  PROVIDER_KEY_SETTINGS, AI_SECRET_SETTING_KEYS, isAgentSecretSettingKey, personalKeySetting,
+} from '@/lib/agent/models';
+export { PROVIDER_KEY_SETTINGS, AI_SECRET_SETTING_KEYS, isAgentSecretSettingKey, personalKeySetting };
 import { getSettingsByKeys } from '@/lib/repositories/settingsRepository';
 
 import type { AgentProviderId } from '@/lib/agent/models';
@@ -60,41 +68,9 @@ export const MAX_RUN_MS =
 export const MAX_HISTORY_MESSAGES = 24;
 export const MAX_HISTORY_CHARS = 160_000;
 
-/** Settings keys holding each provider's API key. */
-export const PROVIDER_KEY_SETTINGS: Record<AgentProviderId, string> = {
-  anthropic: 'ai_anthropic_api_key',
-  openai: 'ai_openai_api_key',
-  google: 'ai_google_api_key',
-  xai: 'ai_xai_api_key',
-};
-
 export const SETTING_MODEL = 'ai_model';
 export const SETTING_ENABLED_MODELS = 'ai_enabled_models';
 export const SETTING_AGENT_ENABLED = 'ai_agent_enabled';
-
-/** All settings keys that store a provider secret. */
-export const AI_SECRET_SETTING_KEYS: string[] = Object.values(PROVIDER_KEY_SETTINGS);
-
-/**
- * Settings key holding a user's personal (only-me) key for a provider.
- * Shared project keys live at the plain PROVIDER_KEY_SETTINGS key; personal
- * keys are suffixed with the owner's user id and shadow the shared key for
- * that user only.
- */
-export function personalKeySetting(provider: AgentProviderId, userId: string): string {
-  return `${PROVIDER_KEY_SETTINGS[provider]}:${userId}`;
-}
-
-/**
- * True for any settings key holding a provider secret — shared
- * ("ai_anthropic_api_key") or per-user ("ai_anthropic_api_key:<userId>").
- * Use this instead of exact-match checks wherever secrets must be filtered.
- */
-export function isAgentSecretSettingKey(key: string): boolean {
-  return AI_SECRET_SETTING_KEYS.some(
-    (secret) => key === secret || key.startsWith(`${secret}:`),
-  );
-}
 
 export type KeySource = 'setting' | 'env';
 
