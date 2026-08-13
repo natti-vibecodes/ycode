@@ -56,35 +56,54 @@ SCRIPT_RE = re.compile(r"<script\b.*?</script>", re.S | re.I)
 STYLE_RE = re.compile(r"<style\b.*?</style>", re.S | re.I)
 TAG_RE = re.compile(r"<[^>]+>")
 WS_RE = re.compile(r"\s+")
+# Synced chrome assets carry a millisecond timestamp in the filename, which is what changes when
+# site.js / site.css are re-minted.
+ASSET_RE = re.compile(r"/(\d{13}-[a-z0-9]+)\.(?:js|css)")
 
 
 def log(msg: str) -> None:
     print(f"[{datetime.now():%H:%M:%S}] {msg}", flush=True)
 
 
-def visible_text_hash(base: str, path: str, timeout: int = 60):
-    """Hash of a page's visible text. Returns None on ANY failure — never a hash, so a failure
-    can never be mistaken for a changed page."""
+def page_hash(base: str, path: str, timeout: int = 60):
+    """Hash of a page's visible text PLUS its chrome asset references. Returns None on ANY failure
+    — never a hash, so a failure can never be mistaken for a changed page.
+
+    The asset half is not decoration; it closes the blind spot this watcher shipped with. Hashing
+    visible text alone made a CHROME ASSET SWAP invisible: when a sync mints a new site.js or
+    site.css, the filename in the HTML changes and not one character of visible text does. So the
+    watcher slept through exactly the change class the review server most needs to track, and
+    :3003 served an old site.js — a homepage that had stopped behaving like its own prototype —
+    until Natalia noticed it herself.
+
+    Stripping <script>/<style> BODIES is still right: they carry per-compile chunk names and
+    generated CSS that churn without the page changing. The fix is to extract the asset
+    REFERENCES from the raw HTML first, then strip. Those references are the two-clock proxy in
+    its most honest form — a sync changes them, a press changes the text, and this notices both.
+    """
     try:
         with urllib.request.urlopen(base + path, timeout=timeout) as resp:
             html = resp.read().decode("utf-8", "replace")
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
         return None
+
+    # Timestamped storage assets (…/1786649738114-ae0mszsmpob.js). Sorted so ordering churn in the
+    # head cannot masquerade as a change.
+    assets = sorted(set(ASSET_RE.findall(html)))
+
     body = html[html.find("<body"):]
-    # Scripts carry per-compile chunk names and styles carry generated CSS; both churn without the
-    # page having changed, so stripping them is what makes this signal quiet enough to act on.
     body = STYLE_RE.sub(" ", SCRIPT_RE.sub(" ", body))
     text = WS_RE.sub(" ", TAG_RE.sub(" ", body)).strip()
     if not text:
         return None
-    return hashlib.sha256(text.encode()).hexdigest()[:16]
+    return hashlib.sha256(("|".join(assets) + "||" + text).encode()).hexdigest()[:16]
 
 
 def fingerprint(base: str):
     """None if ANY page fails, so a partial read can never look like a change."""
     out = {}
     for path in PAGES:
-        h = visible_text_hash(base, path)
+        h = page_hash(base, path)
         if h is None:
             return None
         out[path] = h
