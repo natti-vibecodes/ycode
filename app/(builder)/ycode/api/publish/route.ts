@@ -940,8 +940,30 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     stats.totalDurationMs = Math.round(performance.now() - startTime);
 
+    // A publish can fail AFTER writing published rows — the steps above are not one
+    // transaction. Cache invalidation lived only on the success path, so a mid-publish
+    // failure left live data behind pre-publish cached renders, indefinitely and silently:
+    // /insights served a newsletter component with its children missing for hours because
+    // a publish 500'd on `JWT issued at future` before reaching invalidation (SCA-1120
+    // follow-up). Clear here too — clearAllCache is idempotent, and over-clearing costs a
+    // cold cache while under-clearing serves wrong content with every signal green.
+    let cachesCleared = false;
+    try {
+      await clearAllCache();
+      cachesCleared = true;
+    } catch {
+      // Non-fatal, but the caller must be told: see the flag in the response.
+    }
+    if (!cachesCleared) {
+      console.error('[publish] FAILED and could not clear caches — served pages may be stale');
+    }
+
     return noCache(
-      { error: error instanceof Error ? error.message : 'Failed to publish' },
+      {
+        error: error instanceof Error ? error.message : 'Failed to publish',
+        // Explicit so a failed publish never leaves cache state ambiguous.
+        caches_cleared: cachesCleared,
+      },
       500
     );
   }
