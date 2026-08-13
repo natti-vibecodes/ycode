@@ -283,6 +283,22 @@ describe('comments cannot break the walk (SCA-1369 regression)', () => {
     assert.equal((out.bodyEnd.match(/<footer/g) || []).length, 1, 'only the real footer is routed');
   });
 
+  test('the HOUSE COMMENT STYLE — quoting the mount attribute in prose — is safe', () => {
+    // The cards lane flagged this: nav.html's comment (which broke the walk) and the footer
+    // comment they added both QUOTE the attribute and describe render order in prose. The house
+    // style will keep producing this family, so it is fixtured rather than left to luck — their
+    // footer comment avoided compounding the bug by not containing a literal <body>, which was
+    // chance, not design.
+    const houseStyle = `<!-- data-ycode-mount="body-end" is Development's SCA-1369 fix. Global body
+     code renders before page content, so a page whose article lives in custom code would show the
+     footer above it. Value is exactly "body-end"; "body-start" is the nav's. DO NOT REMOVE. -->
+<footer data-ycode-mount="body-end"><p>&copy;</p></footer>`;
+    const out = splitCustomCodeByMount(houseStyle);
+    assert.ok(out.bodyEnd.includes('<footer'), 'the real footer must still route');
+    assert.equal((out.bodyEnd.match(/<footer/g) || []).length, 1, 'the comment must not add a phantom');
+    assert.ok(out.rest.includes('DO NOT REMOVE'), 'the comment survives');
+  });
+
   test('an unterminated comment leaves the remainder exactly as authored', () => {
     const html = '<!-- never closed <div data-ycode-mount="body-end">x</div>';
     const out = splitCustomCodeByMount(html);
