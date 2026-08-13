@@ -733,7 +733,11 @@ export const ELEMENT_TEMPLATES: Record<string, ElementTemplateEntry> = {
       ],
       attributes: { type: 'button' },
       design: {
-        typography: { isActive: true, color: '#ffffff', fontSize: '16px' },
+        // 14px, matching the `text-[14px]` class below (SCA-1332). These disagreed — design said
+        // 16, the class said 14, and the CLASS wins — so the panel reported a size no button has
+        // ever rendered at. Aligned DOWN to what reality already does, so this is truth-in-panel
+        // with zero visual change; moving buttons to 16 would be a design decision, not a fix.
+        typography: { isActive: true, color: '#ffffff', fontSize: '14px' },
         spacing: { isActive: true, paddingLeft: '16px', paddingRight: '16px', paddingTop: '8px', paddingBottom: '8px' },
         backgrounds: { backgroundColor: '#171717', isActive: true },
       },

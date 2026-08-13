@@ -52,13 +52,16 @@ describe('ELEMENT_TEMPLATES birth defaults (SCA-1332)', () => {
       `templates pinning a font size changed: ${pinned.join(', ')}. If this is intentional, update the list and say why.`);
   });
 
-  test('KNOWN INCONSISTENCY: the button template contradicts itself', () => {
-    // design says 16px, classes say 14px — and the class wins. Documented as a test rather than
-    // silently fixed, because changing it changes how every existing button renders, which is
-    // Natalia's call and not a side effect of a text-layer ticket.
+  test('REGRESSION: the button template\'s panel and class AGREE', () => {
+    // They used to disagree — design 16px, class 14px — and the class wins, so the design panel
+    // reported a size no button had ever rendered at. Aligned to 14px: truth-in-panel, zero
+    // visual change. This asserts the two sources match rather than asserting a specific number,
+    // so it keeps holding if the size is ever changed deliberately.
     const btn = templateOf('button');
-    assert.equal(btn?.design?.typography?.fontSize, '16px');
-    assert.ok((btn?.classes ?? []).includes('text-[14px]'),
-      'if this class is gone the contradiction was resolved — update or delete this test');
+    const designSize = btn?.design?.typography?.fontSize as string | undefined;
+    const classSize = (btn?.classes ?? []).find((c) => /^text-\[\d/.test(c))?.match(/\[(.+)\]/)?.[1];
+    assert.ok(designSize, 'button template should still declare a size');
+    assert.equal(designSize, classSize,
+      `button design says ${designSize} but its class says ${classSize} — the class wins, so the panel would lie`);
   });
 });
