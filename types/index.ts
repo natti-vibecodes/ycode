@@ -462,6 +462,12 @@ export interface Layer {
   // `applyComponentOverrides` and written back to `componentVariantId` before
   // the component tree is expanded.
   componentVariantVariableId?: string;
+  // Binds this layer's EXISTENCE to a `'boolean'` component variable (SCA-1357). When the
+  // resolved value is false the layer and its subtree are removed during override resolution, so
+  // a switched-off section emits no markup at all. Mirrors componentVariantVariableId: a scalar
+  // on the layer rather than an entry in `variables`, because it governs the layer itself rather
+  // than any one of its content slots.
+  componentVisibilityVariableId?: string;
   componentOverrides?: {
     text?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (text)
     rich_text?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (rich text)
@@ -471,6 +477,7 @@ export interface Layer {
     video?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (video)
     icon?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (icon)
     variant?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (variant)
+    boolean?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (boolean / visibility)
     variableLinks?: Record<string, string>; // childVariableId → parentVariableId (pass-through from nested component to parent)
   };
 
@@ -694,7 +701,7 @@ export interface BlockTemplate {
 export interface ComponentVariable {
   id: string;        // Unique variable ID
   name: string;      // Display name (e.g., "Button title")
-  type?: 'text' | 'rich_text' | 'image' | 'link' | 'audio' | 'video' | 'icon' | 'variant'; // Variable type (defaults to 'text' for backwards compatibility)
+  type?: 'text' | 'rich_text' | 'image' | 'link' | 'audio' | 'video' | 'icon' | 'variant' | 'boolean'; // Variable type (defaults to 'text' for backwards compatibility)
   placeholder?: string; // Placeholder text shown in text override inputs
   default_value?: ComponentVariableValue; // Default value
 }
@@ -1484,8 +1491,19 @@ export interface VariantSettingsValue {
   variant_id: string;
 }
 
+// Value of a `'boolean'`-typed ComponentVariable (SCA-1357). Drives whether the layers bound to
+// it render at all: false OMITS the bound subtree from the tree, rather than hiding it with CSS,
+// so nothing ships in the HTML for a switched-off section.
+//
+// An object rather than a bare boolean so it matches every other ComponentVariableValue in shape
+// — the override maps are typed `Record<string, ComponentVariableValue>`, and a primitive member
+// would make every consumer of that union narrow before it could read anything.
+export interface BooleanSettingsValue {
+  value: boolean;
+}
+
 // Component variable value type (text, image, link, audio, video, icon, and variant variables)
-export type ComponentVariableValue = DynamicTextVariable | DynamicRichTextVariable | ImageSettingsValue | LinkSettingsValue | AudioSettingsValue | VideoSettingsValue | IconSettingsValue | VariantSettingsValue;
+export type ComponentVariableValue = DynamicTextVariable | DynamicRichTextVariable | ImageSettingsValue | LinkSettingsValue | AudioSettingsValue | VideoSettingsValue | IconSettingsValue | VariantSettingsValue | BooleanSettingsValue;
 
 // Pagination Layer Definition (partial Layer for styling pagination controls)
 export interface PaginationLayerConfig {

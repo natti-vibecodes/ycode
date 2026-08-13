@@ -7,6 +7,7 @@
 import type { Layer, Component, ComponentVariable, ComponentVariableValue, LayerVariables, VariantSettingsValue } from '@/types';
 import { getComponentVariantLayers } from './component-variant-utils';
 import { normalizeComponentVariableValue } from './variable-utils';
+import { isLayerHiddenByVariable } from './component-visibility';
 
 /**
  * Remap collection_layer_id in a FieldVariable using the ID map.
@@ -361,221 +362,227 @@ export function applyComponentOverrides(
   overrides?: Layer['componentOverrides'],
   componentVariables?: ComponentVariable[]
 ): Layer[] {
-  return layers.map(layer => {
-    let updatedLayer = { ...layer };
+  return layers
+    // Boolean variables decide EXISTENCE, so they are applied before anything else: a layer
+    // switched off emits no markup at all, and filtering here means its children are never
+    // walked either — the whole subtree simply is not in the tree (SCA-1357). Fails visible;
+    // only an explicit false removes anything.
+    .filter(layer => !isLayerHiddenByVariable(layer, overrides, componentVariables))
+    .map(layer => {
+      let updatedLayer = { ...layer };
 
-    // If this nested-component instance has its variant choice driven by a
-    // parent component variable, resolve the variant id from the parent's
-    // override (or the variable's default) and stamp it on `componentVariantId`
-    // before `resolveComponents` reads it. The parent variable is generic — it
-    // doesn't carry a target component id — so the variant id might not exist
-    // on this layer's referenced component; in that case
-    // `getComponentVariantLayers` falls back to the first variant.
-    if (layer.componentVariantVariableId) {
-      const variableId = layer.componentVariantVariableId;
-      const variableDef = componentVariables?.find(v => v.id === variableId);
-      const overrideValue = overrides?.variant?.[variableId];
-      const value = (overrideValue ?? variableDef?.default_value) as VariantSettingsValue | undefined;
-      if (value && typeof value === 'object' && 'variant_id' in value && value.variant_id) {
-        updatedLayer = { ...updatedLayer, componentVariantId: value.variant_id };
+      // If this nested-component instance has its variant choice driven by a
+      // parent component variable, resolve the variant id from the parent's
+      // override (or the variable's default) and stamp it on `componentVariantId`
+      // before `resolveComponents` reads it. The parent variable is generic — it
+      // doesn't carry a target component id — so the variant id might not exist
+      // on this layer's referenced component; in that case
+      // `getComponentVariantLayers` falls back to the first variant.
+      if (layer.componentVariantVariableId) {
+        const variableId = layer.componentVariantVariableId;
+        const variableDef = componentVariables?.find(v => v.id === variableId);
+        const overrideValue = overrides?.variant?.[variableId];
+        const value = (overrideValue ?? variableDef?.default_value) as VariantSettingsValue | undefined;
+        if (value && typeof value === 'object' && 'variant_id' in value && value.variant_id) {
+          updatedLayer = { ...updatedLayer, componentVariantId: value.variant_id };
+        }
       }
-    }
 
-    // Check if this layer has a text variable linked
-    const linkedTextVariableId = layer.variables?.text?.id;
-    if (linkedTextVariableId) {
-      const variableDef = componentVariables?.find(v => v.id === linkedTextVariableId);
-      const overrideCategory = (variableDef?.type === 'rich_text' ? 'rich_text' : 'text') as OverrideCategory;
-      const overrideValue = overrides?.[overrideCategory]?.[linkedTextVariableId];
-      const valueToApply = normalizeComponentVariableValue(overrideValue ?? variableDef?.default_value);
+      // Check if this layer has a text variable linked
+      const linkedTextVariableId = layer.variables?.text?.id;
+      if (linkedTextVariableId) {
+        const variableDef = componentVariables?.find(v => v.id === linkedTextVariableId);
+        const overrideCategory = (variableDef?.type === 'rich_text' ? 'rich_text' : 'text') as OverrideCategory;
+        const overrideValue = overrides?.[overrideCategory]?.[linkedTextVariableId];
+        const valueToApply = normalizeComponentVariableValue(overrideValue ?? variableDef?.default_value);
 
-      // Only apply if it's a text variable (has 'type' property, not ImageSettingsValue)
-      if (valueToApply && 'type' in valueToApply) {
+        // Only apply if it's a text variable (has 'type' property, not ImageSettingsValue)
+        if (valueToApply && 'type' in valueToApply) {
         // Apply the value to this layer's text variable. Mark layers whose
         // text came from an instance override so `injectTranslatedText`
         // doesn't clobber the (already page-scope-translated) override value
         // with the component-scope default translation.
-        updatedLayer = {
-          ...updatedLayer,
-          variables: {
-            ...updatedLayer.variables,
-            text: valueToApply as any,
-          },
-          ...(overrideValue !== undefined ? { _textFromOverride: true } as any : {}),
-        };
-      }
-    }
-
-    // Check if this layer has an image variable linked
-    const linkedImageVariableId = (layer.variables?.image?.src as any)?.id;
-    if (linkedImageVariableId) {
-      // Check for override first, then fall back to variable's default value
-      const overrideValue = overrides?.image?.[linkedImageVariableId];
-      const variableDef = componentVariables?.find(v => v.id === linkedImageVariableId);
-      const imageValue = (overrideValue ?? variableDef?.default_value) as any;
-
-      if (imageValue) {
-        // Apply the value to this layer's image variable
-        updatedLayer = {
-          ...updatedLayer,
-          variables: {
-            ...updatedLayer.variables,
-            image: {
-              ...updatedLayer.variables?.image,
-              // Apply src from value, keeping the variable ID for reference
-              src: imageValue.src ? { ...imageValue.src, id: linkedImageVariableId } : updatedLayer.variables?.image?.src,
-              // Apply alt from value if present
-              alt: imageValue.alt ?? updatedLayer.variables?.image?.alt,
-            },
-          },
-          // Apply width/height attributes from value if present
-          attributes: {
-            ...updatedLayer.attributes,
-            ...(imageValue.width && { width: imageValue.width }),
-            ...(imageValue.height && { height: imageValue.height }),
-            ...(imageValue.loading && { loading: imageValue.loading }),
-          },
-          ...(overrideValue !== undefined ? { _imageFromOverride: true } as any : {}),
-        };
-      }
-    }
-
-    // Check if this layer has a link variable linked
-    const linkedLinkVariableId = (layer.variables?.link as any)?.variable_id;
-    if (linkedLinkVariableId) {
-      const overrideValue = overrides?.link?.[linkedLinkVariableId];
-      const variableDef = componentVariables?.find(v => v.id === linkedLinkVariableId);
-
-      // Only resolve when the link variable belongs to THIS component's scope
-      // (an override exists here or a matching variable is defined). A link that
-      // was already resolved for a nested component instance keeps its
-      // `variable_id` for reference — skipping out-of-scope ids stops an outer
-      // component pass from stripping a valid nested link it doesn't own.
-      if (overrideValue !== undefined || variableDef) {
-        // Use `!== undefined` (not `??`) so an explicit `null` override (user cleared
-        // the link via "No link") is respected instead of reverting to the default.
-        const linkValue = (overrideValue !== undefined ? overrideValue : variableDef?.default_value) as any;
-
-        if (linkValue) {
-          // Apply the value to this layer's link variable, keeping the variable_id for reference
           updatedLayer = {
             ...updatedLayer,
             variables: {
               ...updatedLayer.variables,
-              link: { ...linkValue, variable_id: linkedLinkVariableId },
+              text: valueToApply as any,
             },
+            ...(overrideValue !== undefined ? { _textFromOverride: true } as any : {}),
           };
-        } else {
-          // Explicit "No link" — strip any inherited link settings from the layer
-          // so the rendered element has no href / link wrapper.
-          const { link: _ignored, ...restVariables } = updatedLayer.variables ?? {};
-          updatedLayer = { ...updatedLayer, variables: restVariables };
         }
       }
-    }
 
-    // Check if this layer has an audio variable linked
-    const linkedAudioVariableId = (layer.variables?.audio?.src as any)?.id;
-    if (linkedAudioVariableId) {
-      const overrideValue = overrides?.audio?.[linkedAudioVariableId];
-      const variableDef = componentVariables?.find(v => v.id === linkedAudioVariableId);
-      const audioValue = (overrideValue ?? variableDef?.default_value) as any;
+      // Check if this layer has an image variable linked
+      const linkedImageVariableId = (layer.variables?.image?.src as any)?.id;
+      if (linkedImageVariableId) {
+      // Check for override first, then fall back to variable's default value
+        const overrideValue = overrides?.image?.[linkedImageVariableId];
+        const variableDef = componentVariables?.find(v => v.id === linkedImageVariableId);
+        const imageValue = (overrideValue ?? variableDef?.default_value) as any;
 
-      if (audioValue) {
-        const audioAttributes: Record<string, unknown> = {};
-        if (audioValue.controls !== undefined) audioAttributes.controls = audioValue.controls;
-        if (audioValue.loop !== undefined) audioAttributes.loop = audioValue.loop;
-        if (audioValue.muted !== undefined) audioAttributes.muted = audioValue.muted;
-        if (audioValue.volume !== undefined) audioAttributes.volume = String(audioValue.volume);
+        if (imageValue) {
+        // Apply the value to this layer's image variable
+          updatedLayer = {
+            ...updatedLayer,
+            variables: {
+              ...updatedLayer.variables,
+              image: {
+                ...updatedLayer.variables?.image,
+                // Apply src from value, keeping the variable ID for reference
+                src: imageValue.src ? { ...imageValue.src, id: linkedImageVariableId } : updatedLayer.variables?.image?.src,
+                // Apply alt from value if present
+                alt: imageValue.alt ?? updatedLayer.variables?.image?.alt,
+              },
+            },
+            // Apply width/height attributes from value if present
+            attributes: {
+              ...updatedLayer.attributes,
+              ...(imageValue.width && { width: imageValue.width }),
+              ...(imageValue.height && { height: imageValue.height }),
+              ...(imageValue.loading && { loading: imageValue.loading }),
+            },
+            ...(overrideValue !== undefined ? { _imageFromOverride: true } as any : {}),
+          };
+        }
+      }
 
+      // Check if this layer has a link variable linked
+      const linkedLinkVariableId = (layer.variables?.link as any)?.variable_id;
+      if (linkedLinkVariableId) {
+        const overrideValue = overrides?.link?.[linkedLinkVariableId];
+        const variableDef = componentVariables?.find(v => v.id === linkedLinkVariableId);
+
+        // Only resolve when the link variable belongs to THIS component's scope
+        // (an override exists here or a matching variable is defined). A link that
+        // was already resolved for a nested component instance keeps its
+        // `variable_id` for reference — skipping out-of-scope ids stops an outer
+        // component pass from stripping a valid nested link it doesn't own.
+        if (overrideValue !== undefined || variableDef) {
+        // Use `!== undefined` (not `??`) so an explicit `null` override (user cleared
+        // the link via "No link") is respected instead of reverting to the default.
+          const linkValue = (overrideValue !== undefined ? overrideValue : variableDef?.default_value) as any;
+
+          if (linkValue) {
+          // Apply the value to this layer's link variable, keeping the variable_id for reference
+            updatedLayer = {
+              ...updatedLayer,
+              variables: {
+                ...updatedLayer.variables,
+                link: { ...linkValue, variable_id: linkedLinkVariableId },
+              },
+            };
+          } else {
+          // Explicit "No link" — strip any inherited link settings from the layer
+          // so the rendered element has no href / link wrapper.
+            const { link: _ignored, ...restVariables } = updatedLayer.variables ?? {};
+            updatedLayer = { ...updatedLayer, variables: restVariables };
+          }
+        }
+      }
+
+      // Check if this layer has an audio variable linked
+      const linkedAudioVariableId = (layer.variables?.audio?.src as any)?.id;
+      if (linkedAudioVariableId) {
+        const overrideValue = overrides?.audio?.[linkedAudioVariableId];
+        const variableDef = componentVariables?.find(v => v.id === linkedAudioVariableId);
+        const audioValue = (overrideValue ?? variableDef?.default_value) as any;
+
+        if (audioValue) {
+          const audioAttributes: Record<string, unknown> = {};
+          if (audioValue.controls !== undefined) audioAttributes.controls = audioValue.controls;
+          if (audioValue.loop !== undefined) audioAttributes.loop = audioValue.loop;
+          if (audioValue.muted !== undefined) audioAttributes.muted = audioValue.muted;
+          if (audioValue.volume !== undefined) audioAttributes.volume = String(audioValue.volume);
+
+          updatedLayer = {
+            ...updatedLayer,
+            variables: {
+              ...updatedLayer.variables,
+              audio: {
+                ...updatedLayer.variables?.audio,
+                src: audioValue.src ? { ...audioValue.src, id: linkedAudioVariableId } : updatedLayer.variables?.audio?.src,
+              },
+            },
+            ...(Object.keys(audioAttributes).length > 0 && {
+              attributes: { ...updatedLayer.attributes, ...audioAttributes },
+            }),
+          };
+        }
+      }
+
+      // Check if this layer has a video variable linked
+      const linkedVideoVariableId = (layer.variables?.video?.src as any)?.id;
+      if (linkedVideoVariableId) {
+        const overrideValue = overrides?.video?.[linkedVideoVariableId];
+        const variableDef = componentVariables?.find(v => v.id === linkedVideoVariableId);
+        const videoValue = (overrideValue ?? variableDef?.default_value) as any;
+
+        if (videoValue) {
+          const videoAttributes: Record<string, unknown> = {};
+          if (videoValue.controls !== undefined) videoAttributes.controls = videoValue.controls;
+          if (videoValue.loop !== undefined) videoAttributes.loop = videoValue.loop;
+          if (videoValue.muted !== undefined) videoAttributes.muted = videoValue.muted;
+          if (videoValue.autoplay !== undefined) videoAttributes.autoplay = videoValue.autoplay;
+          if (videoValue.youtubePrivacyMode !== undefined) videoAttributes.youtubePrivacyMode = videoValue.youtubePrivacyMode;
+
+          updatedLayer = {
+            ...updatedLayer,
+            variables: {
+              ...updatedLayer.variables,
+              video: {
+                ...updatedLayer.variables?.video,
+                src: videoValue.src ? { ...videoValue.src, id: linkedVideoVariableId } : updatedLayer.variables?.video?.src,
+                poster: videoValue.poster ?? updatedLayer.variables?.video?.poster,
+              },
+            },
+            ...(Object.keys(videoAttributes).length > 0 && {
+              attributes: { ...updatedLayer.attributes, ...videoAttributes },
+            }),
+          };
+        }
+      }
+
+      // Check if this layer has an icon variable linked
+      const linkedIconVariableId = (layer.variables?.icon?.src as any)?.id;
+      if (linkedIconVariableId) {
+        const overrideValue = overrides?.icon?.[linkedIconVariableId];
+        const variableDef = componentVariables?.find(v => v.id === linkedIconVariableId);
+        const iconValue = (overrideValue ?? variableDef?.default_value) as any;
+
+        if (iconValue) {
+          updatedLayer = {
+            ...updatedLayer,
+            variables: {
+              ...updatedLayer.variables,
+              icon: {
+                ...updatedLayer.variables?.icon,
+                src: iconValue.src ? { ...iconValue.src, id: linkedIconVariableId } : updatedLayer.variables?.icon?.src,
+              },
+            },
+          };
+        }
+      }
+
+      // Resolve variableLinks on nested component overrides
+      if (updatedLayer.componentOverrides?.variableLinks) {
         updatedLayer = {
           ...updatedLayer,
-          variables: {
-            ...updatedLayer.variables,
-            audio: {
-              ...updatedLayer.variables?.audio,
-              src: audioValue.src ? { ...audioValue.src, id: linkedAudioVariableId } : updatedLayer.variables?.audio?.src,
-            },
-          },
-          ...(Object.keys(audioAttributes).length > 0 && {
-            attributes: { ...updatedLayer.attributes, ...audioAttributes },
-          }),
+          componentOverrides: resolveVariableLinks(
+            updatedLayer.componentOverrides,
+            overrides,
+            componentVariables,
+          ),
         };
       }
-    }
 
-    // Check if this layer has a video variable linked
-    const linkedVideoVariableId = (layer.variables?.video?.src as any)?.id;
-    if (linkedVideoVariableId) {
-      const overrideValue = overrides?.video?.[linkedVideoVariableId];
-      const variableDef = componentVariables?.find(v => v.id === linkedVideoVariableId);
-      const videoValue = (overrideValue ?? variableDef?.default_value) as any;
-
-      if (videoValue) {
-        const videoAttributes: Record<string, unknown> = {};
-        if (videoValue.controls !== undefined) videoAttributes.controls = videoValue.controls;
-        if (videoValue.loop !== undefined) videoAttributes.loop = videoValue.loop;
-        if (videoValue.muted !== undefined) videoAttributes.muted = videoValue.muted;
-        if (videoValue.autoplay !== undefined) videoAttributes.autoplay = videoValue.autoplay;
-        if (videoValue.youtubePrivacyMode !== undefined) videoAttributes.youtubePrivacyMode = videoValue.youtubePrivacyMode;
-
-        updatedLayer = {
-          ...updatedLayer,
-          variables: {
-            ...updatedLayer.variables,
-            video: {
-              ...updatedLayer.variables?.video,
-              src: videoValue.src ? { ...videoValue.src, id: linkedVideoVariableId } : updatedLayer.variables?.video?.src,
-              poster: videoValue.poster ?? updatedLayer.variables?.video?.poster,
-            },
-          },
-          ...(Object.keys(videoAttributes).length > 0 && {
-            attributes: { ...updatedLayer.attributes, ...videoAttributes },
-          }),
-        };
+      // Recursively process children
+      if (updatedLayer.children) {
+        updatedLayer.children = applyComponentOverrides(updatedLayer.children, overrides, componentVariables);
       }
-    }
 
-    // Check if this layer has an icon variable linked
-    const linkedIconVariableId = (layer.variables?.icon?.src as any)?.id;
-    if (linkedIconVariableId) {
-      const overrideValue = overrides?.icon?.[linkedIconVariableId];
-      const variableDef = componentVariables?.find(v => v.id === linkedIconVariableId);
-      const iconValue = (overrideValue ?? variableDef?.default_value) as any;
-
-      if (iconValue) {
-        updatedLayer = {
-          ...updatedLayer,
-          variables: {
-            ...updatedLayer.variables,
-            icon: {
-              ...updatedLayer.variables?.icon,
-              src: iconValue.src ? { ...iconValue.src, id: linkedIconVariableId } : updatedLayer.variables?.icon?.src,
-            },
-          },
-        };
-      }
-    }
-
-    // Resolve variableLinks on nested component overrides
-    if (updatedLayer.componentOverrides?.variableLinks) {
-      updatedLayer = {
-        ...updatedLayer,
-        componentOverrides: resolveVariableLinks(
-          updatedLayer.componentOverrides,
-          overrides,
-          componentVariables,
-        ),
-      };
-    }
-
-    // Recursively process children
-    if (updatedLayer.children) {
-      updatedLayer.children = applyComponentOverrides(updatedLayer.children, overrides, componentVariables);
-    }
-
-    return updatedLayer;
-  });
+      return updatedLayer;
+    });
 }
 
 /**

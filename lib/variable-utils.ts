@@ -26,6 +26,7 @@ export const EMPTY_OVERRIDES: NonNullable<Layer['componentOverrides']> = {
   video: {},
   icon: {},
   variant: {},
+  boolean: {},
   variableLinks: {},
 };
 

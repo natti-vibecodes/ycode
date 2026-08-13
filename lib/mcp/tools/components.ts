@@ -41,8 +41,8 @@ import {
 } from '@/lib/mcp/broadcast';
 import { designSchema, richTextBlockSchema, templateEnum } from './shared-schemas';
 
-const variableTypeEnum = z.enum(['text', 'rich_text', 'image', 'link', 'audio', 'video', 'icon', 'variant'])
-  .describe('Variable type. "variant" lets instances pick which variant of a nested component is rendered.');
+const variableTypeEnum = z.enum(['text', 'rich_text', 'image', 'link', 'audio', 'video', 'icon', 'variant', 'boolean'])
+  .describe('Variable type. "variant" lets instances pick which variant of a nested component is rendered. "boolean" is a show/hide switch: the layers linked to it are OMITTED from the page entirely when it is false (no markup, not CSS-hidden).');
 
 const variableSchema = z.object({
   name: z.string().describe('Display name (e.g. "Button label", "Hero image")'),
@@ -70,6 +70,12 @@ const variableUpdateSchema = z.object({
  * the component, so wrap it in the matching variable value here.
  */
 function normalizeDefaultValue(value: unknown, type: z.infer<typeof variableTypeEnum>): ComponentVariableValue {
+  // Canonicalise a bare boolean default into the stored `{ value }` shape, so every consumer
+  // reads one form. The resolver still accepts a bare boolean defensively — hand-written and
+  // pre-normalisation values exist — but nothing this tool writes should need that leniency.
+  if (type === 'boolean' && typeof value === 'boolean') {
+    return { value } as ComponentVariableValue;
+  }
   if (typeof value === 'string') {
     return type === 'rich_text'
       ? createTextComponentVariableValue(stringToTiptapContent(value))
@@ -330,6 +336,7 @@ variable's declared type, so you only pass the relevant field.`,
         url: z.string().optional().describe('For link variables: external URL'),
         link_page_id: z.string().optional().describe('For link variables: link to this page by ID (alternative to url)'),
         variant_id: z.string().optional().describe('For variant variables: the nested component variant ID to render'),
+        value: z.boolean().optional().describe('For boolean variables: true shows the linked layers, false OMITS them from the page entirely'),
       })).optional().describe('Per-variable content overrides for this instance'),
     },
     async ({ page_id, layer_id, variant_id, reset_overrides, overrides }) => {
@@ -367,6 +374,7 @@ variable's declared type, so you only pass the relevant field.`,
         video: { ...(base.video ?? {}) },
         icon: { ...(base.icon ?? {}) },
         variant: { ...(base.variant ?? {}) },
+        boolean: { ...(base.boolean ?? {}) },
         variableLinks: { ...(base.variableLinks ?? {}) },
       };
 
@@ -1389,6 +1397,8 @@ interface OverrideEntryInput {
   url?: string;
   link_page_id?: string;
   variant_id?: string;
+  /** For boolean variables. Optional-but-meaningful when false, so callers must test `undefined`. */
+  value?: boolean;
 }
 
 /**
@@ -1433,6 +1443,12 @@ function buildOverrideValue(category: string, entry: OverrideEntryInput): Compon
     case 'variant':
       if (!entry.variant_id) return null;
       return { variant_id: entry.variant_id } as ComponentVariableValue;
+
+    case 'boolean':
+      // `false` is a meaningful value, so this must test for undefined rather than falsiness —
+      // `if (!entry.value)` would make "switch it off" indistinguishable from "say nothing".
+      if (entry.value === undefined) return null;
+      return { value: entry.value } as ComponentVariableValue;
 
     default:
       return null;
@@ -1520,6 +1536,11 @@ function linkVariableToLayer(layer: Layer, variableId: string, variableType: str
       // Variant variables target the layer's nested-component variant override
       // via a top-level layer field (not inside variables).
       return { ...layer, componentVariantVariableId: variableId, variables: vars };
+
+    case 'boolean':
+      // Boolean variables govern the layer ITSELF rather than one of its content slots, so like
+      // variant they bind through a top-level field (SCA-1357).
+      return { ...layer, componentVisibilityVariableId: variableId, variables: vars };
   }
 
   return { ...layer, variables: vars };
