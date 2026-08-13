@@ -10,6 +10,7 @@
 
 import type { FieldVariable, CollectionItemWithValues, CollectionField } from '@/types';
 import { isValidUUID } from '@/lib/utils';
+import { stripEmptyJsonLd } from '@/lib/strip-empty-json-ld';
 import { getAssetProxyUrl } from '@/lib/asset-utils';
 import { isAssetFieldType, isMultipleAssetField } from '@/lib/collection-field-utils';
 import { buildAbsoluteAssetUrl, getSiteBaseUrl } from '@/lib/url-utils';
@@ -153,7 +154,8 @@ export async function resolveCustomCodePlaceholders(
   options: ResolveCustomCodeOptions = {}
 ): Promise<string> {
   if (!collectionItem || !collectionItem.values || !fields.length) {
-    return code;
+    // Still strip: a hand-authored empty schema block is just as empty as a resolved one.
+    return stripEmptyJsonLd(code);
   }
 
   const fieldsByName = new Map(fields.map(field => [field.name, field]));
@@ -180,10 +182,14 @@ export async function resolveCustomCodePlaceholders(
     resolvedTokens.set(token, await resolvePlaceholderToken(token, itemValues, fieldsByName, isPublished, getBaseUrl, options.tenantId));
   }
 
-  return code.replace(PLACEHOLDER_REGEX, (match, rawToken) => {
+  const resolved = code.replace(PLACEHOLDER_REGEX, (match, rawToken) => {
     const value = resolvedTokens.get(rawToken.trim());
     return value == null ? match : value;
   });
+
+  // AFTER resolution, not before: the tag is only knowably empty once its placeholder has been
+  // filled (or not). A schema block whose CMS field is empty must not ship as an empty tag.
+  return stripEmptyJsonLd(resolved);
 }
 
 /**
