@@ -43,7 +43,8 @@
     "prepare": "husky",
     "review": "NEXT_DIST_DIR=.next-review next build && NEXT_DIST_DIR=.next-review PUBLISH_ALLOWED= next start -p 3003",
     "review:start": "NEXT_DIST_DIR=.next-review PUBLISH_ALLOWED= next start -p 3003",
-    "review:build": "rm -rf .next-review/cache && NEXT_DIST_DIR=.next-review next build"
+    "review:rebuild": "bash scripts/review-rebuild.sh",
+    "review:build:unsafe-inplace": "rm -rf .next-review/cache && NEXT_DIST_DIR=.next-review next build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",
