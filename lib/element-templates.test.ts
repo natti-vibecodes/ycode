@@ -52,6 +52,30 @@ describe('ELEMENT_TEMPLATES birth defaults (SCA-1332)', () => {
       `templates pinning a font size changed: ${pinned.join(', ')}. If this is intentional, update the list and say why.`);
   });
 
+  test('REGRESSION: no template is born bold (SCA-1391)', () => {
+    // The brand type scale runs 300–500 and is never bold, and the site carries a global rescue
+    // rule that reads a bold heading as rogue imported type and restyles it to the 148px hero
+    // scale. So `fontWeight: '700'` on the heading template did not just render off-brand — it
+    // tripped a correction meant for something else, and put two legal-page H1s at hero size
+    // inside a 680px column. Asserted across ALL templates, not just heading, because the next
+    // one will arrive by copy-paste.
+    for (const [key, entry] of Object.entries(ELEMENT_TEMPLATES as Record<string, {
+      template?: { design?: { typography?: Record<string, unknown> }; classes?: string[] };
+    }>)) {
+      const weight = entry.template?.design?.typography?.fontWeight as string | undefined;
+      if (weight !== undefined) {
+        assert.ok(Number(weight) <= 500,
+          `${key} is born at weight ${weight}; the scale stops at 500 and bold trips the rogue-type rescue rule`);
+      }
+      // The class again, for the same reason as the size: it is what actually renders.
+      const boldClass = (entry.template?.classes ?? []).find(
+        (c) => /^font-\[(\d+)\]$/.test(c) && Number(c.match(/\[(\d+)\]/)![1]) > 500,
+      );
+      assert.equal(boldClass, undefined,
+        `${key} carries ${boldClass}, which re-pins a weight the design property no longer sets`);
+    }
+  });
+
   test('REGRESSION: the button template\'s panel and class AGREE', () => {
     // They used to disagree — design 16px, class 14px — and the class wins, so the design panel
     // reported a size no button had ever rendered at. Aligned to 14px: truth-in-panel, zero
