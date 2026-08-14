@@ -1,6 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { isDraftOnlySettingKey } from './settings-keys';
 
 /**
@@ -49,7 +50,12 @@ describe('isDraftOnlySettingKey (SCA-1345)', () => {
  * cannot catch a caller that simply doesn't call, so these assert the wiring itself.
  */
 describe('every settings writer invalidates (SCA-1345)', () => {
-  const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
+  // `__dirname`, not `import.meta.url` (SCA-1390). The suite runs under `ts-node/register` in
+  // CommonJS; `import.meta` flips node into ESM, where the extensionless `./settings-keys`
+  // import above no longer resolves. This file therefore threw at import and its three guards
+  // — the ones written so the MCP tool could never again write settings behind the cache's
+  // back — had never actually run. It also was not listed in `npm test`, so nothing said so.
+  const read = (p: string) => readFileSync(join(__dirname, p), 'utf8');
 
   test('REGRESSION: the MCP tool does not write settings behind the cache\'s back', () => {
     const src = read('./mcp/tools/settings.ts');

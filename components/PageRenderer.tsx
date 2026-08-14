@@ -3,6 +3,7 @@ import BodyClassApplier from '@/components/BodyClassApplier';
 import ContentHeightReporter from '@/components/ContentHeightReporter';
 import CustomCodeInjector from '@/components/CustomCodeInjector';
 import { splitCustomCodeByMount } from '@/lib/custom-code-mount';
+import { toClientPages, toClientFolders } from '@/lib/client-page-projection';
 import HreflangAlternateLinks from '@/components/HreflangAlternateLinks';
 import LayerRendererPublic from '@/components/LayerRendererPublic';
 import SliderInitializer from '@/components/SliderInitializer';
@@ -958,8 +959,12 @@ export default async function PageRenderer({
           currentLocale={locale}
           availableLocales={availableLocales}
           localizedPageUrls={localizedPageUrls}
-          pages={pages as any}
-          folders={folders as any}
+          // Only the link-resolution fields cross the boundary (SCA-1390). Passing the
+          // raw rows shipped every page's `settings` — including 20 case studies' full
+          // articles in `settings.custom_code.body` — into the Flight payload of every
+          // page on the site. See lib/client-page-projection.ts.
+          pages={toClientPages(pages) as any}
+          folders={toClientFolders(folders) as any}
           collectionItemSlugs={collectionItemSlugs}
           isPreview={isPreview}
           translations={translations}
