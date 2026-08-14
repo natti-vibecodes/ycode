@@ -656,9 +656,21 @@ export const ELEMENT_TEMPLATES: Record<string, ElementTemplateEntry> = {
   heading: {
     name: 'Heading',
     description: 'Large heading text (h1)',
+    // Born with NO weight (SCA-1391), the sibling of SCA-1332's fontSize removal.
+    //
+    // 700 broke the brand law twice over. The type scale runs 300–500 and is never bold, so every
+    // heading created through add_layer arrived off-brand. Worse, the site carries a global rescue
+    // rule that treats a bold heading as rogue imported type and restyles it to the 148px hero
+    // scale — so a template default nobody chose rendered two legal-page H1s at hero size inside a
+    // 680px column. The default did not merely look wrong; it triggered a correction aimed at
+    // something else entirely.
+    //
+    // The CLASS goes with the design property. Classes win over the design panel, so dropping only
+    // `fontWeight` would leave the heading bold while the panel reported that it was not — the
+    // exact panel-lies-about-the-render bug the button template's regression test pins.
     template: textLayerTemplate('Heading', 'h1', {
-      typography: { isActive: true, fontSize: '48px', fontWeight: '700', lineHeight: '1.1', letterSpacing: '-0.01' },
-    }, ['text-[48px]', 'font-[700]', 'leading-[1.1]', 'tracking-[-0.01em]']),
+      typography: { isActive: true, fontSize: '48px', lineHeight: '1.1', letterSpacing: '-0.01' },
+    }, ['text-[48px]', 'leading-[1.1]', 'tracking-[-0.01em]']),
   },
   text: {
     name: 'Text',
