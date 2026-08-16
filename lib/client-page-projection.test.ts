@@ -102,11 +102,11 @@ describe('toClientPages / toClientFolders (SCA-1390)', () => {
  * unit test cannot catch a caller that stops projecting, so assert the wiring itself.
  */
 /**
- * SCA-1399 — the database-side twin. SCA-1390 stopped the fat `settings` crossing into the RSC
+ * SCA-1390 (DB side) — the database-side twin. SCA-1390 stopped the fat `settings` crossing into the RSC
  * payload; it did NOT stop it leaving Postgres, because that projection runs after the fetch.
  * These guard the query itself. Source-level, because the alternative is a live Supabase call.
  */
-describe('link-resolution reads are projected at the QUERY level (SCA-1399)', () => {
+describe('link-resolution reads are projected at the QUERY level (SCA-1390 (DB side))', () => {
   const fnBody = (src: string, name: string) => {
     const start = src.indexOf(`export async function ${name}`);
     assert.notEqual(start, -1, `${name} must exist`);

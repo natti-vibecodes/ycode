@@ -921,7 +921,7 @@ async function duplicateFolderContents(
 }
 
 /**
- * Folders trimmed to what LINK RESOLUTION needs (SCA-1399). Sibling of
+ * Folders trimmed to what LINK RESOLUTION needs (SCA-1390 (DB side)). Sibling of
  * `getPagesForLinkResolution` — see the reasoning there.
  *
  * Folder rows are small, so this is not about bytes: `PageFolderSettings.auth.password` is a plain

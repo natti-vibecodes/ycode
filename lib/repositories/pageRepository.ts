@@ -1350,7 +1350,7 @@ export async function enrichDraftPagesWithPublishStatus(pages: Page[]): Promise<
 }
 
 /**
- * Pages trimmed to what LINK RESOLUTION needs (SCA-1399).
+ * Pages trimmed to what LINK RESOLUTION needs (SCA-1390 (DB side)).
  *
  * `getAllPages` selects `*`, and on this site that is 55 published rows carrying 1.71 MB of
  * `settings` — 85.4% of it `settings.custom_code.body`, because 20 case studies keep their whole

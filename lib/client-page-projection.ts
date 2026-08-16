@@ -51,7 +51,7 @@ export type ClientPage = Pick<Page, (typeof CLIENT_PAGE_FIELDS)[number]>;
 export type ClientFolder = Pick<PageFolder, (typeof CLIENT_FOLDER_FIELDS)[number]>;
 
 /**
- * Inputs are structural, not `Page`/`PageFolder` (SCA-1399). Since the repository now projects at
+ * Inputs are structural, not `Page`/`PageFolder` (SCA-1390 (DB side)). Since the repository now projects at
  * the QUERY level, what arrives here is already narrower than a full row — and requiring the full
  * type would force a cast at the call site, which is how a projection quietly gets reverted.
  * A full row still satisfies these, so every existing caller and the tests are unaffected.

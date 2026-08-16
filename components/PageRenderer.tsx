@@ -39,7 +39,7 @@ import { findSlugField } from '@/lib/collection-field-utils';
 
 interface PageLinkRef { collection_item_id: string; page_id: string }
 
-// Projected reads, not `getAllPages`/`getAllPageFolders` (SCA-1399). These two fetches exist only
+// Projected reads, not `getAllPages`/`getAllPageFolders` (SCA-1390 (DB side)). These two fetches exist only
 // to resolve links, and selecting `*` pulled 1.71 MB of `settings` out of Postgres per cache miss
 // — 85% of it case-study articles in `custom_code.body` — to read an id and a slug. That is
 // Supabase egress, which is the hop SCA-1390 did NOT touch: its projection runs after this fetch.
@@ -441,7 +441,7 @@ export default async function PageRenderer({
     Object.assign(collectionItemSlugs, pageCollectionSortedItemSlugs);
   }
 
-  // Projected shapes, not full rows (SCA-1399) — these two lists exist only for link resolution.
+  // Projected shapes, not full rows (SCA-1390 (DB side)) — these two lists exist only for link resolution.
   let pages: LinkResolutionPage[] = [];
   let folders: LinkResolutionFolder[] = [];
 
@@ -567,7 +567,7 @@ export default async function PageRenderer({
         }
       }
 
-      // `folders` is projected (SCA-1399). The cast is safe and narrow: this call walks the folder
+      // `folders` is projected (SCA-1390 (DB side)). The cast is safe and narrow: this call walks the folder
       // chain via `buildLocalizedSlugPath`, which reads only `id`, `slug` and `page_folder_id` —
       // all present. The parameter is still typed `PageFolder[]` because page-utils' ten folder
       // signatures include `getPasswordProtection`, which genuinely needs `settings.auth`; widening
