@@ -266,7 +266,21 @@ export async function uploadFile(
     const { data, error } = await supabase.storage
       .from(STORAGE_BUCKET)
       .upload(storagePath, fileToUpload, {
-        cacheControl: '3600',
+        // One year, not one hour (Supabase egress overage, 2026-08-16).
+        //
+        // `generateStoragePath` mints `{folder}/{timestamp}-{random}.{ext}`, so every upload gets
+        // a URL nothing else will ever use: same URL always means same bytes. That is exactly the
+        // condition under which a long max-age is safe, and it is why `upsert: false` below is
+        // load-bearing rather than incidental.
+        //
+        // At one hour a visitor re-downloaded the whole asset set every hour — on this site 11.81
+        // MB for a cold homepage, 93% of it four background mp4s. At a year they fetch it once.
+        //
+        // Do NOT copy this to the upload sites that pass `upsert: true` — thumbnail-upload.ts
+        // (`components/{id}.webp`) and the profile avatar route both reuse a STABLE path for
+        // changing content, so a long max-age there would pin a stale image for a year with no
+        // way to bust it. Unique path is the precondition; without it 3600 is correct.
+        cacheControl: '31536000',
         upsert: false,
         contentType: mimeType,
       });
