@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { uploadFile } from '@/lib/file-upload';
 import { getAllAssets, getAssetById, updateAsset, deleteAsset } from '@/lib/repositories/assetRepository';
+import { getAssetProxyUrl } from '@/lib/asset-utils';
 
 export function registerAssetTools(server: McpServer) {
   server.tool(
@@ -83,6 +84,22 @@ Use base64_data for images generated locally (e.g. AI-generated images in a sand
               message: `Uploaded "${asset.filename}" successfully`,
               asset_id: asset.id,
               public_url: asset.public_url,
+              // The /a/ proxy path for this asset, resolved AT UPLOAD TIME (Supabase egress).
+              //
+              // `public_url` points at Supabase storage, served `public, max-age=3600`. The same
+              // bytes through this app's /a/ route are served `max-age=31536000, immutable`, so a
+              // caller that writes markup should write this one.
+              //
+              // Returned here so callers never have to derive it. The path encodes the asset id
+              // in base62 plus a slug and a mime-derived extension; a caller reimplementing that
+              // — `sync-chrome.py` is Python and would have to — produces URLs that look right
+              // and 404, which on a background video is invisible until someone opens the page.
+              // It also removes the alternative: a hand-pinned URL map in another repo, which
+              // makes routine CSS edits hard-block the sync until someone regenerates it.
+              //
+              // null for assets with no storage_path (SVGs are stored inline, not in the
+              // bucket). Callers must fall back to `public_url` on null rather than assuming.
+              proxy_url: getAssetProxyUrl(asset),
               width: asset.width,
               height: asset.height,
             }),
