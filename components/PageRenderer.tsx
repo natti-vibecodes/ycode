@@ -16,8 +16,8 @@ import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
 import { generateInitialAnimationCSS, type HiddenLayerInfo } from '@/lib/animation-utils';
 import { buildCustomFontsCss, buildFontClassesCss, fetchGoogleFontsCss, getGoogleFontLinks } from '@/lib/font-utils';
 import { buildImageSizes, collectLayerAssetIds, findLcpCandidate, generateImageSrcset, getAssetProxyUrl, getOptimizedImageUrl } from '@/lib/asset-utils';
-import { getAllPages } from '@/lib/repositories/pageRepository';
-import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
+import { getPagesForLinkResolution, type LinkResolutionPage } from '@/lib/repositories/pageRepository';
+import { getFoldersForLinkResolution, type LinkResolutionFolder } from '@/lib/repositories/pageFolderRepository';
 import { getMapboxAccessToken, getGoogleMapsEmbedApiKey } from '@/lib/map-server';
 import { getAllColorVariables } from '@/lib/repositories/colorVariableRepository';
 import { getAllGlobalVariables } from '@/lib/repositories/globalVariableRepository';
@@ -39,14 +39,18 @@ import { findSlugField } from '@/lib/collection-field-utils';
 
 interface PageLinkRef { collection_item_id: string; page_id: string }
 
+// Projected reads, not `getAllPages`/`getAllPageFolders` (SCA-1399). These two fetches exist only
+// to resolve links, and selecting `*` pulled 1.71 MB of `settings` out of Postgres per cache miss
+// — 85% of it case-study articles in `custom_code.body` — to read an id and a slug. That is
+// Supabase egress, which is the hop SCA-1390 did NOT touch: its projection runs after this fetch.
 const getCachedPublishedPages = unstable_cache(
-  async () => getAllPages({ is_published: true }),
+  async () => getPagesForLinkResolution(true),
   ['page-renderer-published-pages'],
   { tags: ['all-pages'], revalidate: false }
 );
 
 const getCachedPublishedFolders = unstable_cache(
-  async () => getAllPageFolders({ is_published: true }),
+  async () => getFoldersForLinkResolution(true),
   ['page-renderer-published-folders'],
   { tags: ['all-pages'], revalidate: false }
 );
@@ -437,8 +441,9 @@ export default async function PageRenderer({
     Object.assign(collectionItemSlugs, pageCollectionSortedItemSlugs);
   }
 
-  let pages: Page[] = [];
-  let folders: PageFolder[] = [];
+  // Projected shapes, not full rows (SCA-1399) — these two lists exist only for link resolution.
+  let pages: LinkResolutionPage[] = [];
+  let folders: LinkResolutionFolder[] = [];
 
   try {
     // Start pages/folders fetch and referenced-item fetch in parallel
@@ -450,8 +455,8 @@ export default async function PageRenderer({
       usePublishedData
         ? Promise.all([getCachedPublishedPages(), getCachedPublishedFolders()])
         : Promise.all([
-          getAllPages({ is_published: false }),
-          getAllPageFolders({ is_published: false }),
+          getPagesForLinkResolution(false),
+          getFoldersForLinkResolution(false),
         ]),
       itemsMapPromise.then(async (itemsMap) => {
         const collectionIds = new Set(Object.values(itemsMap).map(i => i.collection_id));
@@ -562,7 +567,13 @@ export default async function PageRenderer({
         }
       }
 
-      localizedPageUrls = buildLocalizedPageUrls(page, folders, availableLocales, translationsByLocale, dynamicSlug);
+      // `folders` is projected (SCA-1399). The cast is safe and narrow: this call walks the folder
+      // chain via `buildLocalizedSlugPath`, which reads only `id`, `slug` and `page_folder_id` —
+      // all present. The parameter is still typed `PageFolder[]` because page-utils' ten folder
+      // signatures include `getPasswordProtection`, which genuinely needs `settings.auth`; widening
+      // them as a group would hand a shape without `settings` to the one function that reads it.
+      // Splitting that type is worth doing, but not inside a perf fix.
+      localizedPageUrls = buildLocalizedPageUrls(page, folders as PageFolder[], availableLocales, translationsByLocale, dynamicSlug);
     } catch (error) {
       console.error('[PageRenderer] Error building localized page URLs:', error);
     }

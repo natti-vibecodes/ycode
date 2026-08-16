@@ -1348,3 +1348,49 @@ export async function enrichDraftPagesWithPublishStatus(pages: Page[]): Promise<
     return { ...page, has_published_version: true, is_modified: metaChanged || layersChanged || folderChanged };
   });
 }
+
+/**
+ * Pages trimmed to what LINK RESOLUTION needs (SCA-1399).
+ *
+ * `getAllPages` selects `*`, and on this site that is 55 published rows carrying 1.71 MB of
+ * `settings` — 85.4% of it `settings.custom_code.body`, because 20 case studies keep their whole
+ * article there. Every cache miss pulled all of it out of Postgres so PageRenderer could read an
+ * id, a slug and a collection binding, then throw the rest away.
+ *
+ * This is the database-side twin of SCA-1390. That fix stopped those bytes crossing into the RSC
+ * payload, which is Next -> browser; this one stops them leaving Supabase at all, which is the hop
+ * the free-tier egress bill actually counts. The two look like the same fix and are not: the
+ * projection there runs AFTER this fetch, so it never saved a byte of egress.
+ *
+ * NOT a change to `getAllPages` itself. It has 12 callers and several — the MCP tools, the builder
+ * page API — legitimately need the full row. Narrowing it globally would break them silently, in
+ * the builder, where a missing setting looks like lost work rather than a bad query.
+ *
+ * `settings->cms` is kept because it is read server-side (PageRenderer resolves `ref-*` links
+ * through a dynamic page's collection binding). It is two ids, not an article.
+ */
+export interface LinkResolutionPage
+  extends Pick<Page, 'id' | 'slug' | 'name' | 'is_index' | 'is_dynamic' | 'page_folder_id'> {
+  settings: Pick<PageSettings, 'cms'>;
+}
+
+export async function getPagesForLinkResolution(isPublished: boolean): Promise<LinkResolutionPage[]> {
+  const client = await getSupabaseAdmin();
+  if (!client) throw new Error('Supabase not configured');
+
+  const { data, error } = await client
+    .from('pages')
+    .select('id,slug,name,is_index,is_dynamic,page_folder_id,cms:settings->cms')
+    .is('deleted_at', null)
+    .eq('is_published', isPublished)
+    .order('order', { ascending: true });
+
+  if (error) throw new Error(`Failed to fetch pages for link resolution: ${error.message}`);
+
+  // PostgREST returns the aliased JSON path as a top-level key; restore the nesting the rest of
+  // the codebase expects, so callers keep taking a Page-shaped object.
+  return (data || []).map(({ cms, ...page }) => ({
+    ...(page as Omit<LinkResolutionPage, 'settings'>),
+    settings: { cms: (cms ?? undefined) as PageSettings['cms'] },
+  }));
+}

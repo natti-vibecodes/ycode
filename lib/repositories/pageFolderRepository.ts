@@ -919,3 +919,28 @@ async function duplicateFolderContents(
     }
   }
 }
+
+/**
+ * Folders trimmed to what LINK RESOLUTION needs (SCA-1399). Sibling of
+ * `getPagesForLinkResolution` — see the reasoning there.
+ *
+ * Folder rows are small, so this is not about bytes: `PageFolderSettings.auth.password` is a plain
+ * string on these rows, and the folder list is handed to a client component. Not selecting the
+ * column is a stronger guarantee than trimming it afterwards.
+ */
+export type LinkResolutionFolder = Pick<PageFolder, 'id' | 'slug' | 'name' | 'page_folder_id'>;
+
+export async function getFoldersForLinkResolution(isPublished: boolean): Promise<LinkResolutionFolder[]> {
+  const client = await getSupabaseAdmin();
+  if (!client) throw new Error('Supabase not configured');
+
+  const { data, error } = await client
+    .from('page_folders')
+    .select('id,slug,name,page_folder_id')
+    .is('deleted_at', null)
+    .eq('is_published', isPublished)
+    .order('order', { ascending: true });
+
+  if (error) throw new Error(`Failed to fetch folders for link resolution: ${error.message}`);
+  return data || [];
+}

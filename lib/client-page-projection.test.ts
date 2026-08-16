@@ -101,6 +101,45 @@ describe('toClientPages / toClientFolders (SCA-1390)', () => {
  * Source-level guard. The defect was not a wrong branch — it was one prop handed over raw. A
  * unit test cannot catch a caller that stops projecting, so assert the wiring itself.
  */
+/**
+ * SCA-1399 — the database-side twin. SCA-1390 stopped the fat `settings` crossing into the RSC
+ * payload; it did NOT stop it leaving Postgres, because that projection runs after the fetch.
+ * These guard the query itself. Source-level, because the alternative is a live Supabase call.
+ */
+describe('link-resolution reads are projected at the QUERY level (SCA-1399)', () => {
+  const fnBody = (src: string, name: string) => {
+    const start = src.indexOf(`export async function ${name}`);
+    assert.notEqual(start, -1, `${name} must exist`);
+    const end = src.indexOf('\nexport ', start + 1);
+    return src.slice(start, end === -1 ? undefined : end);
+  };
+  const pageSrc = readFileSync(join(__dirname, 'repositories/pageRepository.ts'), 'utf8');
+  const folderSrc = readFileSync(join(__dirname, 'repositories/pageFolderRepository.ts'), 'utf8');
+
+  test('REGRESSION: neither link-resolution read selects *', () => {
+    // `select('*')` on 55 published rows pulled 1.71 MB of settings out of Postgres — 85% of it
+    // case-study articles — so PageRenderer could read an id and a slug.
+    assert.doesNotMatch(fnBody(pageSrc, 'getPagesForLinkResolution'), /select\('\*'\)/);
+    assert.doesNotMatch(fnBody(folderSrc, 'getFoldersForLinkResolution'), /select\('\*'\)/);
+  });
+
+  test('the page read still selects everything link resolution needs', () => {
+    const body = fnBody(pageSrc, 'getPagesForLinkResolution');
+    for (const col of ['id', 'slug', 'name', 'is_index', 'is_dynamic', 'page_folder_id']) {
+      assert.match(body, new RegExp(`\\b${col}\\b`), `${col} is read by buildLocalizedSlugPath`);
+    }
+    // `settings->cms` is read SERVER-side to resolve ref-* links through a dynamic page's
+    // collection binding. Dropping it would break those links silently, at HTTP 200.
+    assert.match(body, /cms:settings->cms/);
+  });
+
+  test('REGRESSION: getAllPages itself is NOT narrowed', () => {
+    // It has 12 callers; the MCP tools and builder page API legitimately need the full row.
+    // Narrowing it globally would surface in the builder as lost work, not as a bad query.
+    assert.match(fnBody(pageSrc, 'getAllPages'), /select\('\*'\)/);
+  });
+});
+
 describe('PageRenderer projects before crossing the boundary (SCA-1390)', () => {
   // `__dirname`, not `new URL(..., import.meta.url)`: the suite runs under `ts-node/register`
   // in CommonJS, and `import.meta` makes node treat the file as ESM — which then cannot resolve

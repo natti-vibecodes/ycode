@@ -51,6 +51,15 @@ export type ClientPage = Pick<Page, (typeof CLIENT_PAGE_FIELDS)[number]>;
 export type ClientFolder = Pick<PageFolder, (typeof CLIENT_FOLDER_FIELDS)[number]>;
 
 /**
+ * Inputs are structural, not `Page`/`PageFolder` (SCA-1399). Since the repository now projects at
+ * the QUERY level, what arrives here is already narrower than a full row — and requiring the full
+ * type would force a cast at the call site, which is how a projection quietly gets reverted.
+ * A full row still satisfies these, so every existing caller and the tests are unaffected.
+ */
+type PageLike = Pick<Page, (typeof CLIENT_PAGE_FIELDS)[number]>;
+type FolderLike = Pick<PageFolder, (typeof CLIENT_FOLDER_FIELDS)[number]>;
+
+/**
  * Why these fields and no others: the client reaches `pages`/`folders` only through
  * `LinkResolutionContext` (lib/link-utils.ts), which looks a page up by `id` and hands it to
  * `buildLocalizedSlugPath` / `buildLocalizedDynamicPageUrl` (lib/page-utils.ts). Between them
@@ -61,7 +70,7 @@ export type ClientFolder = Pick<PageFolder, (typeof CLIENT_FOLDER_FIELDS)[number
  * `settings` is NOT carried. No client-side path reads it — `settings.cms.collection_id` is
  * resolved server-side in PageRenderer before the boundary.
  */
-export function toClientPages(pages: Page[] | undefined | null): ClientPage[] {
+export function toClientPages(pages: PageLike[] | undefined | null): ClientPage[] {
   if (!pages) return [];
   return pages.map((page) => ({
     id: page.id,
@@ -73,7 +82,7 @@ export function toClientPages(pages: Page[] | undefined | null): ClientPage[] {
   }));
 }
 
-export function toClientFolders(folders: PageFolder[] | undefined | null): ClientFolder[] {
+export function toClientFolders(folders: FolderLike[] | undefined | null): ClientFolder[] {
   if (!folders) return [];
   return folders.map((folder) => ({
     id: folder.id,
