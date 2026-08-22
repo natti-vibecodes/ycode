@@ -19,7 +19,7 @@ import { getSlugTranslationsByLocale } from '@/lib/repositories/translationRepos
 import { buildSvgDataUrl, getAssetProxyUrl } from '@/lib/asset-utils';
 import { generateColorVariablesCss } from '@/lib/repositories/colorVariableRepository';
 import { buildPageHreflangAlternates, type HreflangAlternate } from '@/lib/hreflang-utils';
-import { getTranslatableKey } from '@/lib/locale-runtime';
+import { getTranslatableKey, getTranslatedAssetId, getTranslatedText } from '@/lib/locale-runtime';
 import { buildAbsolutePageUrl, getSiteBaseUrl } from '@/lib/url-utils';
 
 /**
@@ -63,6 +63,8 @@ export interface GenerateMetadataOptions {
   tenantId?: string;
   /** Primary domain URL (e.g. https://example.com) for metadataBase */
   primaryDomainUrl?: string;
+  /** Per-locale translations, keyed `{source}:{id}:{content_key}`, for localized SEO */
+  translations?: Record<string, Translation> | null;
 }
 
 /**
@@ -256,24 +258,29 @@ export async function generatePageMetadata(
   page: Page,
   options: GenerateMetadataOptions = {}
 ): Promise<Metadata> {
-  const { isPreview = false, fallbackTitle, fallbackDescription, collectionItem, pagePath, primaryDomainUrl } = options;
+  const { isPreview = false, fallbackTitle, fallbackDescription, collectionItem, pagePath, primaryDomainUrl, translations } = options;
 
   const seo = page.settings?.seo;
   const isErrorPage = page.error_page !== null;
 
+  // Resolve locale-translated SEO values (falls back to originals when no
+  // completed translation exists for the current locale).
+  const seoTitle = getTranslatedText(seo?.title, 'seo:title', translations, page.id);
+  const seoDescription = getTranslatedText(seo?.description, 'seo:description', translations, page.id);
+
   // Build title - resolve field variables if collection item is available
-  let title = seo?.title || page.name || fallbackTitle || 'Page';
-  if (collectionItem && seo?.title) {
-    title = resolveInlineVariables(seo.title, collectionItem) || page.name || fallbackTitle || 'Page';
+  let title = seoTitle || page.name || fallbackTitle || 'Page';
+  if (collectionItem && seoTitle) {
+    title = resolveInlineVariables(seoTitle, collectionItem) || page.name || fallbackTitle || 'Page';
   }
   if (isPreview) {
     title = `[Preview] ${title}`;
   }
 
   // Build description - resolve field variables if collection item is available
-  let description = seo?.description || fallbackDescription || page.name;
-  if (collectionItem && seo?.description) {
-    description = resolveInlineVariables(seo.description, collectionItem) || fallbackDescription || page.name;
+  let description = seoDescription || fallbackDescription || page.name;
+  if (collectionItem && seoDescription) {
+    description = resolveInlineVariables(seoDescription, collectionItem) || fallbackDescription || page.name;
   }
 
   // Base metadata
@@ -349,8 +356,14 @@ export async function generatePageMetadata(
 
   // Add Open Graph and Twitter Card metadata (not for error pages)
   if (!isErrorPage) {
+    // A fixed asset (string ID) can be translated per locale; CMS field
+    // variables resolve from the collection item instead.
+    const seoImage = typeof seo?.image === 'string'
+      ? getTranslatedAssetId(seo.image, 'seo:image', translations, page.id)
+      : seo?.image;
+
     // Resolve image URL (handles both Asset ID string and FieldVariable)
-    let imageUrl = seo?.image ? await resolveImageUrl(seo.image, collectionItem) : null;
+    let imageUrl = seoImage ? await resolveImageUrl(seoImage, collectionItem) : null;
 
     // Make relative URLs absolute — social crawlers require absolute og:image URLs
     if (imageUrl && imageUrl.startsWith('/') && siteBaseUrl) {

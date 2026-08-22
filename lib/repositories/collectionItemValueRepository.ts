@@ -56,6 +56,13 @@ export async function insertValuesBulk(
 
   if (values.length === 0) return;
 
+  // Hoist inline base64 rich-text images to the asset manager so importers never
+  // persist multi-MB data URIs inline (safe no-op for non-rich-text values).
+  // Dynamically imported to keep the upload deps (sharp/file-upload) out of the
+  // read/render module graph that also pulls in this repository.
+  const { uploadInlineRichTextImagesInRows } = await import('@/lib/rich-text-image-upload');
+  await uploadInlineRichTextImagesInRows(values);
+
   const now = new Date().toISOString();
   const valuesToInsert = values.map(v => ({
     id: randomUUID(),
@@ -85,6 +92,11 @@ export async function insertValuesDirectPg(
   values: Array<{ item_id: string; field_id: string; value: string | null; is_published?: boolean }>
 ): Promise<void> {
   if (values.length === 0) return;
+
+  // Hoist inline base64 rich-text images before the direct-PG insert (this path
+  // handles oversized values — exactly where multi-MB base64 blobs land).
+  const { uploadInlineRichTextImagesInRows } = await import('@/lib/rich-text-image-upload');
+  await uploadInlineRichTextImagesInRows(values);
 
   const knex = await getKnexClient();
   const tenantId = await getTenantIdFromHeaders();
@@ -601,6 +613,19 @@ export async function setValuesByFieldName(
   const autoBumpedUpdatedAt = updatedAtFieldId && !(updatedAtFieldId in valuesToSet);
   if (autoBumpedUpdatedAt) {
     valuesToSet[updatedAtFieldId!] = new Date().toISOString();
+  }
+
+  // Hoist any inline base64 images embedded in rich-text values out to the asset
+  // manager before they're stored. Callers that author rich text from markdown
+  // (AI/MCP tools, editor saves) can otherwise persist multi-MB data URIs inline,
+  // which blow past the serverless payload limit and block publishing.
+  const richTextFieldIds = Object.keys(valuesToSet).filter(
+    id => fieldMap[id] === 'rich_text' && typeof valuesToSet[id] === 'string');
+  if (richTextFieldIds.length > 0) {
+    const { uploadInlineRichTextImages } = await import('@/lib/rich-text-image-upload');
+    for (const fieldId of richTextFieldIds) {
+      valuesToSet[fieldId] = await uploadInlineRichTextImages(valuesToSet[fieldId]);
+    }
   }
 
   // Detect changes and removals for translation management (only for draft)

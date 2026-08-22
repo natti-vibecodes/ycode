@@ -14,7 +14,8 @@ import { unstable_cache } from 'next/cache';
 import { resolveCustomCodePlaceholders } from '@/lib/resolve-cms-variables';
 import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
 import { generateInitialAnimationCSS, type HiddenLayerInfo } from '@/lib/animation-utils';
-import { buildCustomFontsCss, buildFontClassesCss, fetchGoogleFontsCss, getGoogleFontLinks } from '@/lib/font-utils';
+import { buildCustomFontsCss, buildFontClassesCss, fetchGoogleFontsCss, getCustomFontPreloads, getGoogleFontLinks } from '@/lib/font-utils';
+import type { FontPreload } from '@/lib/font-utils';
 import { buildImageSizes, collectLayerAssetIds, findLcpCandidate, generateImageSrcset, getAssetProxyUrl, getOptimizedImageUrl } from '@/lib/asset-utils';
 import { getPagesForLinkResolution, type LinkResolutionPage } from '@/lib/repositories/pageRepository';
 import { getFoldersForLinkResolution, type LinkResolutionFolder } from '@/lib/repositories/pageFolderRepository';
@@ -618,12 +619,14 @@ export default async function PageRenderer({
   let fontsCss = '';
   let googleFontsInlinedCss = '';
   let googleFontLinkUrls: string[] = [];
+  let fontPreloads: FontPreload[] = [];
   try {
     const { getAllFonts: getAllDraftFonts } = await import('@/lib/repositories/fontRepository');
     const { getPublishedFonts } = await import('@/lib/repositories/fontRepository');
     const fonts = isPreview ? await getAllDraftFonts() : await getPublishedFonts();
     fontsCss = buildCustomFontsCss(fonts) + buildFontClassesCss(fonts);
     googleFontLinkUrls = getGoogleFontLinks(fonts);
+    fontPreloads = getCustomFontPreloads(fonts);
 
     // Inline the resolved @font-face CSS so the browser skips the blocking
     // round-trip to fonts.googleapis.com and goes straight to gstatic for
@@ -866,6 +869,20 @@ export default async function PageRenderer({
           />
         ))
       )}
+
+      {/* Preload uploaded custom font binaries so the browser fetches them from
+          <head> instead of after CSS parsing, shrinking the font swap window.
+          `crossOrigin` is required — fonts are always fetched in CORS mode. */}
+      {fontPreloads.map((font) => (
+        <link
+          key={`font-preload-${font.href}`}
+          rel="preload"
+          as="font"
+          href={font.href}
+          type={font.type}
+          crossOrigin="anonymous"
+        />
+      ))}
 
       {/* Inject custom font @font-face rules and font class CSS */}
       {fontsCss && (

@@ -1,4 +1,4 @@
-import type { Layer, Page, Translation, Locale, LocaleOption, CollectionField, Component, ComponentVariable, DynamicTextVariable, DynamicRichTextVariable } from '@/types';
+import type { Layer, Page, Translation, Locale, LocaleOption, CollectionField, Component, ComponentVariable, DynamicTextVariable, DynamicRichTextVariable, StringAssetId, FieldVariable } from '@/types';
 import { getLayerIcon, getLayerName } from '@/lib/layer-display-utils';
 import {
   buildLayerTranslationKey,
@@ -651,7 +651,7 @@ function classifySeoValue(value: string): { contentType: 'text' | 'richtext'; op
 
 function extractSeoItems(
   pageId: string,
-  seo: { title?: string; description?: string } | undefined,
+  seo: { title?: string; description?: string; image?: StringAssetId | FieldVariable | null } | undefined,
   items: TranslatableItem[]
 ): void {
   if (!seo) return;
@@ -686,6 +686,22 @@ function extractSeoItems(
       info: {
         icon: 'search',
         label: 'SEO Description',
+      },
+    });
+  }
+
+  // Only a fixed asset (not a CMS field variable) is translatable per locale.
+  if (typeof seo.image === 'string' && seo.image.trim()) {
+    items.push({
+      key: `page:${pageId}:seo:image`,
+      source_type: 'page',
+      source_id: pageId,
+      content_key: 'seo:image',
+      content_type: 'asset_id',
+      content_value: seo.image,
+      info: {
+        icon: 'image',
+        label: 'Social preview',
       },
     });
   }

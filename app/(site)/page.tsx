@@ -274,6 +274,7 @@ export async function generateMetadata(): Promise<Metadata> {
         fallbackTitle: 'Home',
         pagePath: '/',
         globalSeoSettings: globalSettings,
+        translations: data.translations,
       }),
       baseUrl: getSiteBaseUrl({ globalCanonicalUrl: globalSettings.globalCanonicalUrl }),
     }),

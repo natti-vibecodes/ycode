@@ -422,6 +422,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
         collectionItem: data.collectionItem,
         pagePath: '/' + slugPath,
         globalSeoSettings: globalSettings,
+        translations: data.translations,
       }),
       baseUrl: getSiteBaseUrl({ globalCanonicalUrl: globalSettings.globalCanonicalUrl }),
     }),

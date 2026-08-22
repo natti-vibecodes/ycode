@@ -2,6 +2,7 @@ import { createServerClient } from '@supabase/ssr';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { isWorkspaceMember } from '@/lib/roles';
+import { applySecurityHeaders } from '@/lib/security-headers-server';
 
 /**
  * Public API routes that skip authentication.
@@ -186,6 +187,7 @@ export async function proxy(request: NextRequest) {
 
     const rewriteResponse = NextResponse.rewrite(rewriteUrl);
     rewriteResponse.headers.set('x-pathname', pathname);
+    await applySecurityHeaders(rewriteResponse);
     return rewriteResponse;
   }
 
@@ -196,6 +198,11 @@ export async function proxy(request: NextRequest) {
   response.headers.set('x-pathname', pathname);
 
   // Cache-Control for public pages is configured centrally via next.config.ts headers().
+
+  // Apply configurable security headers to public pages only (not builder/API).
+  if (isPublicPage) {
+    await applySecurityHeaders(response);
+  }
 
   return response;
 }

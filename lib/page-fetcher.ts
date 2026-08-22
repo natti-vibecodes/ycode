@@ -5093,7 +5093,7 @@ export function layerToHtml(
 
     attrs.push('data-html-embed="true"');
     attrs.push(`srcdoc="${escapedIframeContent}"`);
-    attrs.push('sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"');
+    attrs.push('sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"');
     attrs.push('style="width: 100%; border: none; display: block;"');
     attrs.push(`title="Code Embed ${layer.id}"`);
 

@@ -266,9 +266,12 @@ export default function LinkSettings(props: LinkSettingsProps) {
     // Check if layer can have a layer-level link (includes rich text links check)
     const { canHaveLinks, issue } = canLayerHaveLink(layer, draft.layers);
 
-    // Only show issue if there's no existing link (allow editing existing links)
-    if (!canHaveLinks && issue && linkType === 'none') {
-      return issue;
+    if (!canHaveLinks && issue) {
+      // Unsupported layer types (iframe-based) can never have a link — always
+      // surface the message. Nesting issues only block when no link exists yet.
+      if (issue.type === 'unsupported' || linkType === 'none') {
+        return issue;
+      }
     }
 
     return null;
@@ -626,11 +629,13 @@ export default function LinkSettings(props: LinkSettingsProps) {
       >
         <Empty>
           <EmptyDescription>
-            {linkNestingIssue.type === 'richText'
-              ? 'Cannot add a link to a layer that contains rich text links. Remove the rich text links first.'
-              : linkNestingIssue.type === 'ancestor'
-                ? `Links cannot be nested. This layer is inside a "${linkNestingIssue.layerName}" layer that already has a link.`
-                : 'Links cannot be nested. This layer contains child layers with links.'}
+            {linkNestingIssue.type === 'unsupported'
+              ? 'Links aren\u2019t supported on this layer, as it renders in an isolated iframe.'
+              : linkNestingIssue.type === 'richText'
+                ? 'Cannot add a link to a layer that contains rich text links. Remove the rich text links first.'
+                : linkNestingIssue.type === 'ancestor'
+                  ? `Links cannot be nested. This layer is inside a "${linkNestingIssue.layerName}" layer that already has a link.`
+                  : 'Links cannot be nested. This layer contains child layers with links.'}
           </EmptyDescription>
         </Empty>
       </SettingsPanel>

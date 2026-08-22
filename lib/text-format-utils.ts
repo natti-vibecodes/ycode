@@ -7,6 +7,7 @@ import { contentHasBlockElements, hasBlockElementsWithResolver } from '@/lib/tip
 import { applyComponentOverrides, resolveComponents } from '@/lib/resolve-components';
 import type { GlobalFieldMeta } from '@/lib/collection-field-utils';
 import { getDefaultFormatId, isFormatValidForFieldType } from '@/lib/variable-format-utils';
+import { getLinkSettingsFromMark } from '@/lib/tiptap-extensions/rich-text-link';
 import HtmlEmbedRenderer from '@/components/HtmlEmbedRenderer';
 import { headingAnchorSlug as sharedHeadingAnchorSlug } from '@/lib/heading-anchors';
 
@@ -538,8 +539,9 @@ function renderTextNode(
                 collectionItemData,
                 pageCollectionItemData,
               };
-              // Use shared link generation utility
-              return generateLinkHref(mark.attrs as LinkSettings, fullContext) || '#';
+              // Normalise attrs to canonical LinkSettings (tolerates legacy
+              // { href, linkType } shape) before resolving the href.
+              return generateLinkHref(getLinkSettingsFromMark(mark.attrs || {}), fullContext) || '#';
             })();
 
           const linkProps: Record<string, any> = {

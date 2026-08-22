@@ -240,6 +240,43 @@ export function mapExtensionToFontFormat(extension: string): string | null {
   }
 }
 
+/** Map a CSS @font-face format string to the MIME type used on `<link>` preloads */
+export function mapFontFormatToMimeType(format: string | null | undefined): string {
+  switch ((format || 'woff2').toLowerCase()) {
+    case 'woff2': return 'font/woff2';
+    case 'woff': return 'font/woff';
+    case 'truetype': return 'font/ttf';
+    case 'opentype': return 'font/otf';
+    case 'embedded-opentype': return 'application/vnd.ms-fontobject';
+    default: return 'font/woff2';
+  }
+}
+
+/** A font file to hint the browser to fetch early via `<link rel="preload" as="font">` */
+export interface FontPreload {
+  href: string;
+  type: string;
+}
+
+/**
+ * Build preload descriptors for uploaded custom fonts so the browser starts
+ * fetching the binaries from <head> instead of after CSS parsing — reducing the
+ * font swap window (CLS/LCP). Google fonts are excluded: they ship many
+ * unicode-range subsets, and preloading all of them wastes bandwidth.
+ */
+export function getCustomFontPreloads(fonts: Font[]): FontPreload[] {
+  const seen = new Set<string>();
+  const preloads: FontPreload[] = [];
+
+  for (const font of fonts) {
+    if (font.type !== 'custom' || !font.url || seen.has(font.url)) continue;
+    seen.add(font.url);
+    preloads.push({ href: font.url, type: mapFontFormatToMimeType(font.kind) });
+  }
+
+  return preloads;
+}
+
 /**
  * Build CSS for loading all installed fonts.
  * Generates @import rules for Google fonts and @font-face for custom fonts.

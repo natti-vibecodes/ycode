@@ -294,6 +294,12 @@ function parseInlineMarks(text: string): TiptapNode[] {
         // returns null for anything else, so the old `{ href, linkType }` shape made
         // every markdown link in MCP-authored rich text render as `#`. Matches the
         // shape `lib/markdown-to-tiptap.ts` already uses for the same mark.
+        //
+        // Upstream d7b770b reached the same shape but also stamps
+        // target="_blank" rel="noopener noreferrer nofollow" on EVERY markdown
+        // link. Deliberately not taken: our rich text is mostly internal article
+        // links, and blanket nofollow throws away internal link equity on an
+        // organic-search-critical site. Set link attrs per link instead.
         marks: [{
           type: 'richTextLink',
           attrs: { type: 'url', url: { type: 'dynamic_text', data: { content: match[4] } } },

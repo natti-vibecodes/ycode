@@ -137,5 +137,6 @@ export async function generateMetadata(): Promise<Metadata> {
   return generatePageMetadata(data.page, {
     isPreview: true,
     fallbackTitle: 'Homepage',
+    translations: data.translations,
   });
 }
