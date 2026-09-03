@@ -239,6 +239,7 @@ function mapDeclaration(prop: string, val: string): string[] {
       out.push(val === 'auto' ? 'aspect-auto' : `aspect-[${val.replace(/\s*\/\s*/g, '/')}]`);
       break;
     case 'box-shadow': out.push(`shadow-[${arb(val)}]`); break;
+    case 'text-shadow': out.push(`text-shadow-[${arb(val)}]`); break;
     case 'background-image': out.push(`bg-[${arb(val)}]`); break;
     case 'flex-grow': out.push(val === '0' ? 'grow-0' : 'grow'); break;
     case 'flex-shrink': out.push(val === '0' ? 'shrink-0' : 'shrink'); break;

@@ -1038,7 +1038,7 @@ function buildSystemPrompt(context?: AgentEditorContext): string {
       .join(', ');
     lines.push(
       `The user currently has these layer(s) selected: ${refs}. When they say "this", "this section", or "the selected element", they mean these layer(s). ` +
-        `A selected layer is often a container/wrapper, not the exact element a change applies to — call get_layers and inspect its subtree, then apply each change to the descendant the property actually belongs to (e.g. text color/typography goes on the text/heading/button layer inside, not the wrapping div). ` +
+        `A selected layer is often a container/wrapper, not the exact element a change applies to — call get_layers and inspect its subtree, then apply each change to the descendant the property actually belongs to (e.g. text color/typography/textShadow goes on the text/heading/button layer inside, not the wrapping div; cursor goes on the clickable layer itself). ` +
         `If a change applies to several descendants, update all of them in one batch. Never ask the user to re-select a deeper element.`,
     );
   }

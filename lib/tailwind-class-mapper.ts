@@ -307,8 +307,8 @@ const CLASS_PROPERTY_MAP: Record<string, RegExp> = {
   // Typography
   fontFamily: /^font-(sans|serif|mono|\[.+\])$/,
   // Updated to match partial arbitrary values like text-n, text-no, text-non (not just complete text-[10rem])
-  // Excludes text-align values and text-wrap utilities (wrap, nowrap, balance, pretty)
-  fontSize: /^text-(?!(?:left|center|right|justify|start|end|wrap|nowrap|balance|pretty)(?:\s|$)).+$/,
+  // Excludes text-align values, text-wrap utilities, and text-shadow
+  fontSize: /^text-(?!(?:left|center|right|justify|start|end|wrap|nowrap|balance|pretty|shadow)(?:-|\s|$)).+$/,
   fontWeight: /^font-(thin|extralight|light|normal|medium|semibold|bold|extrabold|black|\[.+\])$/,
   lineHeight: /^leading-(none|tight|snug|normal|relaxed|loose|\d+|\[.+\])$/,
   letterSpacing: /^tracking-(tighter|tight|normal|wide|wider|widest|\[.+\]|.+)$/,
@@ -324,8 +324,9 @@ const CLASS_PROPERTY_MAP: Record<string, RegExp> = {
   // Updated to match partial arbitrary values like text-r, text-re, text-red (not just complete text-[#FF0000])
   // Excludes fontSize named values, text-align values, and text-wrap utilities
   // Includes opacity modifier: text-[#cc8d8d]/59
-  color: /^text-(?!(?:xs|sm|base|lg|xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl|left|center|right|justify|start|end|wrap|nowrap|balance|pretty)(?:\s|$)).+(\/\d+)?$/,
+  color: /^text-(?!(?:xs|sm|base|lg|xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl|left|center|right|justify|start|end|wrap|nowrap|balance|pretty|shadow)(?:-|\s|$)).+(\/\d+)?$/,
   placeholderColor: /^placeholder:text-.+(\/\d+)?$/,
+  textShadow: /^text-shadow(-none|-2xs|-xs|-sm|-md|-lg|-\[.+\])?$/,
 
   // Backgrounds
   backgroundColor: /^bg-(?!(?:auto|cover|contain|bottom|center|left|left-bottom|left-top|right|right-bottom|right-top|top|repeat|no-repeat|repeat-x|repeat-y|repeat-round|repeat-space|none|gradient-to-t|gradient-to-tr|gradient-to-r|gradient-to-br|gradient-to-b|gradient-to-bl|gradient-to-l|gradient-to-tl)$)((\w+)(-\d+)?|\[.+\](?:\/\d+)?)$/,
@@ -366,6 +367,7 @@ const CLASS_PROPERTY_MAP: Record<string, RegExp> = {
   blur: /^blur(-none|-sm|-md|-lg|-xl|-2xl|-3xl|-\[.+\])?$/,
   backdropBlur: /^backdrop-blur(-none|-sm|-md|-lg|-xl|-2xl|-3xl|-\[.+\])?$/,
   mixBlendMode: /^mix-blend-(normal|multiply|screen|overlay|darken|lighten|color-dodge|color-burn|hard-light|soft-light|difference|exclusion|hue|saturation|color|luminosity)$/,
+  cursor: /^cursor-.+$/,
 
   // Positioning
   position: /^(static|fixed|absolute|relative|sticky)$/,
@@ -826,6 +828,12 @@ export function propertyToClass(
         if (value === 'none') return 'line-clamp-none';
         if (/^\d+$/.test(value)) return `line-clamp-${value}`;
         return `line-clamp-[${value}]`;
+      case 'textShadow':
+        if (value === 'none') return 'text-shadow-none';
+        if (['2xs', 'xs', 'sm', 'md', 'lg'].includes(value)) {
+          return `text-shadow-${value}`;
+        }
+        return `text-shadow-[${value.replace(/\s+/g, '_')}]`;
       case 'color':
         // Check if value is a gradient (linear-gradient or radial-gradient)
         if (value.includes('gradient(')) {
@@ -1110,6 +1118,8 @@ export function propertyToClass(
       case 'mixBlendMode':
         if (value === 'normal') return '';
         return `mix-blend-${value}`;
+      case 'cursor':
+        return `cursor-${value}`;
     }
   }
 
@@ -1245,6 +1255,10 @@ export function getAffectedProperties(className: string): string[] {
   if (baseClass.startsWith('bg-clip-')) {
     properties.push('backgroundClip');
     if (baseClass === 'bg-clip-text') properties.push('color');
+    return properties;
+  }
+  if (baseClass.startsWith('text-shadow')) {
+    properties.push('textShadow');
     return properties;
   }
   if (baseClass === 'text-transparent') {
@@ -1620,6 +1634,17 @@ export function classesToDesign(classes: string | string[]): Layer['design'] {
       if (value) design.typography!.lineClamp = value;
     }
 
+    // Text Shadow
+    if (cls.startsWith('text-shadow-[')) {
+      const value = extractArbitraryValue(cls);
+      if (value) design.typography!.textShadow = value;
+    } else if (cls === 'text-shadow-none') {
+      design.typography!.textShadow = 'none';
+    } else if (cls.match(/^text-shadow-(2xs|xs|sm|md|lg)$/)) {
+      const match = cls.match(/^text-shadow-(.+)$/);
+      if (match) design.typography!.textShadow = match[1];
+    }
+
     // Line Height
     if (cls.startsWith('leading-[')) {
       const value = extractArbitraryValue(cls);
@@ -1960,6 +1985,12 @@ export function classesToDesign(classes: string | string[]): Layer['design'] {
       if (match) design.effects!.mixBlendMode = match[1];
     }
 
+    // Cursor
+    if (cls.startsWith('cursor-')) {
+      const value = cls.slice('cursor-'.length);
+      if (value) design.effects!.cursor = value;
+    }
+
     // ===== POSITIONING =====
     // Position
     if (cls === 'static') design.positioning!.position = 'static';
@@ -2256,6 +2287,10 @@ function isImageValue(value: string): boolean {
 function shouldIncludeClassForProperty(className: string, property: string, pattern: RegExp): boolean {
   // Strip breakpoint and state prefixes for helper class detection
   const baseClass = className.replace(/^(max-lg:|max-md:|lg:|md:)?(hover:|focus:|active:|disabled:|visited:|current:)?/, '');
+
+  if (baseClass.startsWith('text-shadow')) {
+    return property === 'textShadow';
+  }
 
   // Special handling for text color property
   // Include gradient-related classes (bg-[gradient], text-transparent) but NOT bg-clip-text

@@ -122,7 +122,13 @@ being viewed (aria-current) — use it for active nav-link and pagination stylin
 
 GRADIENTS: Use bgGradientVars in backgrounds to set CSS gradients.
 Example: { backgrounds: { isActive: true, bgGradientVars: { "--bg-img": "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" } } }
-For gradient text: also set backgroundClip: "text" and color to "transparent".`,
+For gradient text: also set backgroundClip: "text" and color to "transparent".
+
+CURSOR: effects.cursor — "pointer", "default", "text", "grab", "wait", "not-allowed", or "auto".
+Set this on the clickable layer itself (button, link, card), not a nested text child.
+
+TEXT SHADOW: typography.textShadow — e.g. "0px_1px_2px_rgba(0,0,0,0.4)" (underscores, not spaces)
+or a named size ("sm", "md", "lg"). Apply on the text/heading/button layer.`,
     {
       page_id: z.string().describe('The page ID'),
       layer_id: z.string().describe('The layer ID to update'),

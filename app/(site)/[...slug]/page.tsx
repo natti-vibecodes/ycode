@@ -12,6 +12,7 @@ import PasswordForm from '@/components/PasswordForm';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
 import { getSiteBaseUrl } from '@/lib/url-utils';
+import { getOffCanonicalDynamicRedirect } from '@/lib/hreflang-utils';
 import { matchRedirect } from '@/lib/redirect-utils';
 import type { Page, PageFolder, Translation, Redirect as RedirectType } from '@/types';
 
@@ -305,6 +306,23 @@ export default async function Page({ params }: PageProps) {
   // Check password protection for this page.
   // First evaluate without cookies() so non-protected pages stay cacheable.
   const folders = await fetchCachedFoldersForAuth();
+
+  // Redirect off-canonical dynamic slugs (e.g. a default slug requested under a
+  // translated locale) to the canonical localized URL to avoid duplicate content.
+  if (page.is_dynamic && collectionItem) {
+    const canonicalPath = getOffCanonicalDynamicRedirect({
+      page,
+      folders,
+      locale,
+      translations,
+      itemId: collectionItem.id,
+      currentPath,
+    });
+    if (canonicalPath) {
+      permanentRedirect(canonicalPath);
+    }
+  }
+
   const protectionCheck = getPasswordProtection(page, folders, null);
 
   // If page is protected, opt into dynamic rendering and read the auth cookie.

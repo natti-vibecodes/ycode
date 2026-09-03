@@ -3,9 +3,9 @@
 /**
  * PageSelector - Reusable page selector with folder tree
  *
- * Renders a Popover dropdown showing pages organized in a folder tree.
- * Used in link settings, rich text link settings, collection link fields,
- * and the center canvas page navigation.
+ * Renders a combobox: the trigger is the filter input, and the popover
+ * lists pages in a folder tree. Used in link settings, rich text link
+ * settings, collection link fields, and the center canvas page navigation.
  */
 
 // 1. React
@@ -13,19 +13,16 @@ import React, { memo, useCallback, useContext, useEffect, useMemo, useRef, useSt
 
 // 3. ShadCN UI
 import Icon from '@/components/ui/icon';
-import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover';
+
+// 4. Internal components
+import { FilterCombobox } from './filter-combobox';
 
 // 5. Stores
 import { usePagesStore } from '@/stores/usePagesStore';
 
 // 6. Utils
-import { buildPageTree, getNodeIcon, getPageIcon } from '@/lib/page-utils';
+import { buildPageTree, filterPageTree, getNodeIcon, getPageIcon } from '@/lib/page-utils';
 import { cn } from '@/lib/utils';
 
 // 7. Types
@@ -39,7 +36,7 @@ interface PageSelectorProps {
   disabled?: boolean;
   /** Show error pages in a separate "Error pages" folder. Default: false */
   includeErrorPages?: boolean;
-  /** Custom class for the trigger button */
+  /** Custom class for the trigger */
   className?: string;
   /** Popover alignment relative to trigger. Default: "end" (right-aligned) */
   align?: 'start' | 'center' | 'end';
@@ -55,6 +52,7 @@ interface PageSelectorProps {
 interface TreeContextValue {
   collapsedFolderIds: Set<string>;
   selectedValue: string | null;
+  isSearching: boolean;
   onToggleFolder: (folderId: string) => void;
   onPageSelect: (pageId: string) => void;
 }
@@ -80,6 +78,7 @@ const TreeRow = memo(function TreeRow({ node, depth, isCollapsed, isSelected }: 
   const handleRowClick = useCallback(() => {
     if (!ctx) return;
     if (isFolder) {
+      if (ctx.isSearching) return;
       ctx.onToggleFolder(node.id);
     } else {
       ctx.onPageSelect(node.id);
@@ -88,7 +87,7 @@ const TreeRow = memo(function TreeRow({ node, depth, isCollapsed, isSelected }: 
 
   const handleChevronClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    if (isFolder && ctx) {
+    if (isFolder && ctx && !ctx.isSearching) {
       ctx.onToggleFolder(node.id);
     }
   }, [ctx, isFolder, node.id]);
@@ -96,6 +95,7 @@ const TreeRow = memo(function TreeRow({ node, depth, isCollapsed, isSelected }: 
   return (
     <div>
       <div
+        onMouseDown={(e) => e.preventDefault()}
         onClick={handleRowClick}
         className={cn(
           "hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground text-muted-foreground [&_svg:not([class*='text-'])]:text-muted-foreground relative flex w-full cursor-pointer items-center gap-1.25 rounded-sm py-1.5 pr-8 pl-2 text-xs outline-hidden select-none data-disabled:opacity-50 data-disabled:cursor-not-allowed [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
@@ -105,6 +105,8 @@ const TreeRow = memo(function TreeRow({ node, depth, isCollapsed, isSelected }: 
       >
         {hasChildren ? (
           <button
+            type="button"
+            tabIndex={-1}
             onClick={handleChevronClick}
             className={cn(
               'size-3 flex items-center justify-center shrink-0',
@@ -158,15 +160,15 @@ const TreeRow = memo(function TreeRow({ node, depth, isCollapsed, isSelected }: 
 });
 
 /**
- * Thin wrapper that reads `collapsedFolderIds` and `selectedValue` from
- * context and forwards only primitive props to the memoized `TreeRow`. This
- * keeps `TreeRow` insulated from Set/object identity changes higher up the
- * tree — a toggle on folder A only re-renders A's row (and its child connectors
+ * Thin wrapper that reads collapse/selection/search state from context and
+ * forwards only primitive props to the memoized `TreeRow`. This keeps
+ * `TreeRow` insulated from Set/object identity changes higher up the tree —
+ * a toggle on folder A only re-renders A's row (and its child connectors
  * for unmount), not unrelated rows.
  */
 function TreeRowConnector({ node, depth }: { node: PageTreeNode; depth: number }) {
   const ctx = useContext(TreeContext);
-  const isCollapsed = !!ctx && node.type === 'folder' && ctx.collapsedFolderIds.has(node.id);
+  const isCollapsed = !!ctx && !ctx.isSearching && node.type === 'folder' && ctx.collapsedFolderIds.has(node.id);
   const isSelected = !!ctx && node.type === 'page' && node.id === ctx.selectedValue;
   return <TreeRow
     node={node} depth={depth}
@@ -186,6 +188,17 @@ function getFolderIdKey(folders: PageFolder[]): string {
   return ids.join('|');
 }
 
+function findFirstPageId(nodes: PageTreeNode[]): string | null {
+  for (const node of nodes) {
+    if (node.type === 'page') return node.id;
+    if (node.children) {
+      const childId = findFirstPageId(node.children);
+      if (childId) return childId;
+    }
+  }
+  return null;
+}
+
 /**
  * Reusable page selector with folder tree dropdown
  */
@@ -199,7 +212,6 @@ function PageSelectorImpl({
   align = 'end',
   popoverClassName,
 }: PageSelectorProps) {
-  const [isOpen, setIsOpen] = useState(false);
 
   const pages = usePagesStore((state) => state.pages);
   const folders = usePagesStore((state) => state.folders);
@@ -325,21 +337,18 @@ function PageSelectorImpl({
     return ancestors;
   }, [pagesById, foldersById]);
 
-  const handleOpenChange = useCallback((open: boolean) => {
-    setIsOpen(open);
-    if (open && value) {
-      const ancestorIds = getAncestorFolderIds(value);
-      if (ancestorIds.length > 0) {
-        setCollapsedFolderIds(prev => {
-          let changed = false;
-          const next = new Set(prev);
-          for (const id of ancestorIds) {
-            if (next.delete(id)) changed = true;
-          }
-          return changed ? next : prev;
-        });
+  const expandSelectedAncestors = useCallback(() => {
+    if (!value) return;
+    const ancestorIds = getAncestorFolderIds(value);
+    if (ancestorIds.length === 0) return;
+    setCollapsedFolderIds((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const id of ancestorIds) {
+        if (next.delete(id)) changed = true;
       }
-    }
+      return changed ? next : prev;
+    });
   }, [value, getAncestorFolderIds]);
 
   const toggleFolder = useCallback((folderId: string) => {
@@ -354,82 +363,88 @@ function PageSelectorImpl({
     });
   }, []);
 
-  const handlePageSelect = useCallback((pageId: string) => {
-    onValueChange(pageId);
-    setIsOpen(false);
-  }, [onValueChange]);
-
   const selectedPage = useMemo(() => {
     if (!value) return null;
     return pagesById.get(value) ?? null;
   }, [value, pagesById]);
 
-  const treeContext = useMemo<TreeContextValue>(() => ({
-    collapsedFolderIds,
-    selectedValue: value,
-    onToggleFolder: toggleFolder,
-    onPageSelect: handlePageSelect,
-  }), [collapsedFolderIds, value, toggleFolder, handlePageSelect]);
+  const handleEnter = useCallback((query: string) => {
+    const filtered = filterPageTree(pageTree, query);
+    const errorFiltered = errorPagesNode
+      ? filterPageTree([errorPagesNode], query)[0] ?? null
+      : null;
+    const firstPageId = findFirstPageId(filtered)
+      ?? (errorFiltered ? findFirstPageId([errorFiltered]) : null);
+    if (firstPageId) onValueChange(firstPageId);
+  }, [pageTree, errorPagesNode, onValueChange]);
 
   return (
-    <Popover open={isOpen} onOpenChange={handleOpenChange}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="input"
-          size="sm"
-          role="combobox"
-          aria-expanded={isOpen}
-          disabled={disabled}
-          className={cn('w-full justify-between', selectedPage && 'text-foreground', className)}
-        >
-          <div className="flex items-center gap-1.5 min-w-0 flex-1">
-            {selectedPage ? (
-              <>
-                <Icon
-                  name={getPageIcon(selectedPage)}
-                  className="size-3 opacity-50 shrink-0"
-                />
-                <span className="truncate">{selectedPage.name}</span>
-                {selectedPage.is_publishable === false && (
-                  <Icon name="eye-off" className="size-3.5 shrink-0 opacity-70" />
-                )}
-              </>
-            ) : (
-              <span className="truncate">{placeholder}</span>
-            )}
-          </div>
-          <div className="shrink-0">
-            <Icon name="chevronDown" className="size-2.5! shrink-0 opacity-50" />
-          </div>
-        </Button>
-      </PopoverTrigger>
+    <FilterCombobox
+      displayValue={selectedPage?.name ?? ''}
+      placeholder={placeholder}
+      searchPlaceholder="Search pages..."
+      ariaLabel="Select page"
+      disabled={disabled}
+      className={cn(selectedPage && 'text-foreground', className)}
+      align={align}
+      popoverClassName={popoverClassName}
+      leading={selectedPage ? (
+        <Icon
+          name={getPageIcon(selectedPage)}
+          className="size-3 opacity-50 shrink-0"
+        />
+      ) : null}
+      trailing={selectedPage?.is_publishable === false ? (
+        <Icon name="eye-off" className="size-3.5 shrink-0 opacity-70" />
+      ) : null}
+      onOpen={expandSelectedAncestors}
+      onEnter={handleEnter}
+    >
+      {({ search, hasQuery, close }) => {
+        const filteredPageTree = filterPageTree(pageTree, search);
+        const filteredErrorPagesNode = !errorPagesNode
+          ? null
+          : hasQuery
+            ? filterPageTree([errorPagesNode], search)[0] ?? null
+            : errorPagesNode;
+        const hasResults = filteredPageTree.length > 0 || !!filteredErrorPagesNode;
 
-      <PopoverContent className={cn('w-auto min-w-56 max-w-96 p-1', popoverClassName)} align={align}>
-        <div className="max-h-100 overflow-y-auto">
-          <TreeContext.Provider value={treeContext}>
-            {pageTree.length > 0 && pageTree.map((node) => (
+        return (
+          <TreeContext.Provider
+            value={{
+              collapsedFolderIds,
+              selectedValue: value,
+              isSearching: hasQuery,
+              onToggleFolder: toggleFolder,
+              onPageSelect: (pageId) => {
+                onValueChange(pageId);
+                close();
+              },
+            }}
+          >
+            {filteredPageTree.length > 0 && filteredPageTree.map((node) => (
               <TreeRowConnector
                 key={node.id} node={node}
                 depth={0}
               />
             ))}
 
-            {errorPagesNode && (
+            {filteredErrorPagesNode && (
               <>
-                <Separator className="my-1" />
-                <TreeRowConnector node={errorPagesNode} depth={0} />
+                {filteredPageTree.length > 0 && <Separator className="my-1" />}
+                <TreeRowConnector node={filteredErrorPagesNode} depth={0} />
               </>
             )}
-          </TreeContext.Provider>
 
-          {pageTree.length === 0 && !errorPagesNode && (
-            <div className="text-sm text-muted-foreground text-center py-4">
-              No pages found
-            </div>
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
+            {!hasResults && (
+              <div className="text-xs text-muted-foreground text-center py-4">
+                No pages found
+              </div>
+            )}
+          </TreeContext.Provider>
+        );
+      }}
+    </FilterCombobox>
   );
 }
 

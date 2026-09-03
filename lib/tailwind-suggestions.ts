@@ -130,6 +130,14 @@ const TAILWIND_CLASSES = [
   'tracking-wide',
   'tracking-wider',
   'tracking-widest',
+
+  // Typography - Text Shadow
+  'text-shadow-2xs',
+  'text-shadow-xs',
+  'text-shadow-sm',
+  'text-shadow-md',
+  'text-shadow-lg',
+  'text-shadow-none',
   
   // Spacing - Padding
   'p-0',
@@ -367,6 +375,15 @@ const TAILWIND_CLASSES = [
   'opacity-50',
   'opacity-75',
   'opacity-100',
+
+  // Interactivity - Cursor
+  'cursor-auto',
+  'cursor-default',
+  'cursor-pointer',
+  'cursor-text',
+  'cursor-grab',
+  'cursor-wait',
+  'cursor-not-allowed',
   
   // Positioning - Position
   'static',

@@ -37,6 +37,18 @@ test('replaces an embedded designSchema with the compact node', () => {
   // Every property name is still discoverable in the category description.
   assert.match(categories.typography.description as string, /\bfontSize\b/);
   assert.match(categories.typography.description as string, /\bplaceholderColor\b/);
+  assert.match(categories.typography.description as string, /\btextShadow\b/);
+  // Short .describe() texts are inlined so the model sees value formats.
+  assert.match(
+    categories.typography.description as string,
+    /textShadow \(0px_1px_2px_rgba\(0,0,0,0\.4\) or sm\/md\/lg\)/,
+  );
+  assert.ok(categories.effects);
+  assert.match(categories.effects.description as string, /\bcursor\b/);
+  assert.match(
+    categories.effects.description as string,
+    /cursor \(pointer \| default \| text \| grab \| wait \| not-allowed \| auto\)/,
+  );
 });
 
 test('compacts designSchema inside nested structures (arrays, unions)', () => {

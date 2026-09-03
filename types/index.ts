@@ -46,6 +46,7 @@ export interface TypographyDesign {
   verticalAlign?: string;
   color?: string;
   placeholderColor?: string;
+  textShadow?: string;
 }
 
 export interface SpacingDesign {
@@ -128,6 +129,7 @@ export interface EffectsDesign {
   filter?: string;
   backdropFilter?: string;
   mixBlendMode?: string;
+  cursor?: string;
 }
 
 export interface PositioningDesign {

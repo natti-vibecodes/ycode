@@ -7,6 +7,12 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import {
+  displayChangeName,
+  sortUnpublishedChanges,
+  type UnpublishedChange,
+} from '@/lib/publish-changes';
+import { getDeletedDraftSummaries } from '@/lib/sync-utils';
 import type { Component, ComponentVariant, Layer } from '@/types';
 import { generateComponentContentHash } from '../hash-utils';
 import { deleteTranslationsInBulk, markTranslationsIncomplete } from '@/lib/repositories/translationRepository';
@@ -479,6 +485,69 @@ export async function getUnpublishedComponents(): Promise<Component[]> {
   }
 
   return unpublishedComponents;
+}
+
+/**
+ * Named components pending publish: new, modified, and deleted.
+ * Selects only id/name/hash — not layer trees.
+ */
+export async function getUnpublishedComponentChanges(): Promise<UnpublishedChange[]> {
+  const client = await getSupabaseAdmin();
+  if (!client) {
+    throw new Error('Failed to initialize Supabase client');
+  }
+
+  const [draftResult, deleted] = await Promise.all([
+    client
+      .from('components')
+      .select('id, name, content_hash')
+      .eq('is_published', false)
+      .is('deleted_at', null),
+    getDeletedDraftSummaries('components'),
+  ]);
+
+  if (draftResult.error) {
+    throw new Error(`Failed to fetch draft components: ${draftResult.error.message}`);
+  }
+
+  const drafts = draftResult.data || [];
+  const publishedHashById = new Map<string, string | null>();
+
+  if (drafts.length > 0) {
+    const { data: publishedRows, error } = await client
+      .from('components')
+      .select('id, content_hash')
+      .in('id', drafts.map((component) => component.id))
+      .eq('is_published', true);
+
+    if (error) {
+      throw new Error(`Failed to fetch published components: ${error.message}`);
+    }
+
+    for (const published of publishedRows || []) {
+      publishedHashById.set(published.id, published.content_hash);
+    }
+  }
+
+  const changed: UnpublishedChange[] = [];
+  for (const draft of drafts) {
+    if (!publishedHashById.has(draft.id)) {
+      changed.push({ id: draft.id, name: displayChangeName(draft.name), status: 'new' });
+      continue;
+    }
+
+    if (draft.content_hash !== publishedHashById.get(draft.id)) {
+      changed.push({ id: draft.id, name: displayChangeName(draft.name), status: 'modified' });
+    }
+  }
+
+  const deletedChanges: UnpublishedChange[] = deleted.map((component) => ({
+    id: component.id,
+    name: displayChangeName(component.name),
+    status: 'deleted',
+  }));
+
+  return sortUnpublishedChanges([...changed, ...deletedChanges]);
 }
 
 /**
