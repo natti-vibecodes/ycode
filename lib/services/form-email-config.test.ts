@@ -19,6 +19,7 @@ import {
   type FormLayerTree,
   type ResolvedFormEmail,
 } from '@/lib/services/form-email-config';
+import { submissionRateLimiter } from '@/lib/form-abuse-controls';
 import type { Layer } from '@/types';
 
 // `server-only` throws on import; pre-seed require.cache so the route's dependency graph loads.
@@ -240,6 +241,10 @@ describe('form email config — notifyFormSubmission never throws', () => {
 // Route-level: the real POST handler, the real resolver, faked stores only.
 // ---------------------------------------------------------------------------
 
+// require()d rather than imported so the tests can swap these modules' exports for fakes —
+// an ESM import binding is read-only. (The rule only surfaced now because this file became
+// lint-staged again; the pattern predates it.)
+/* eslint-disable @typescript-eslint/no-require-imports */
 const repo = require('@/lib/repositories/formSubmissionRepository');
 const pageLayersRepo = require('@/lib/repositories/pageLayersRepository');
 const componentRepo = require('@/lib/repositories/componentRepository');
@@ -248,6 +253,7 @@ const webhookService = require('@/lib/services/webhookService');
 const integrationService = require('@/lib/apps/integration-service');
 const serverConfig = require('@/lib/services/form-email-config.server');
 const route = require('@/app/(builder)/ycode/api/form-submissions/route');
+/* eslint-enable @typescript-eslint/no-require-imports */
 
 interface SendCall { to: string; subject: string }
 
@@ -277,6 +283,10 @@ describe('POST /ycode/api/form-submissions — client email config is ignored', 
     errorLogs = [];
 
     serverConfig.clearFormLayerTreeCache();
+    // The route's abuse controls (H5) share a module-scoped limiter across requests. These
+    // tests post several times from the same (absent) IP, so without a reset they would start
+    // failing on rate limiting the moment a sixth case is added here.
+    submissionRateLimiter.reset();
 
     repo.createFormSubmission = async (data: unknown) => {
       createdSubmissions.push(data);
@@ -375,12 +385,12 @@ describe('POST /ycode/api/form-submissions — client email config is ignored', 
     componentRepo.getAllComponents = async (isPublished: boolean) =>
       isPublished
         ? [{
-            id: 'c1',
-            name: 'Contact band',
-            layers: pageTree(contactFormLayer()).layers,
-            variants: [{ id: 'v1', name: 'Default', layers: pageTree(contactFormLayer()).layers }],
-            is_published: true,
-          }]
+          id: 'c1',
+          name: 'Contact band',
+          layers: pageTree(contactFormLayer()).layers,
+          variants: [{ id: 'v1', name: 'Default', layers: pageTree(contactFormLayer()).layers }],
+          is_published: true,
+        }]
         : [];
 
     await postSubmission({

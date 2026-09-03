@@ -12,6 +12,19 @@ import { dispatchStoredFormNotification } from '@/lib/services/form-email-config
 import { processAppIntegrations } from '@/lib/apps/integration-service';
 import { noCache } from '@/lib/api-response';
 import { buildSubmissionMetadata, formatLeadWriteFailure } from '@/lib/form-attribution';
+import {
+  MAX_SUBMISSION_BYTES,
+  HONEYPOT_FIELD,
+  byteLengthOf,
+  clientIpFrom,
+  declaredBodyBytes,
+  exceedsSizeCap,
+  formatHoneypotRejection,
+  formatOversizeRejection,
+  formatRateLimitRejection,
+  isHoneypotTripped,
+  submissionRateLimiter,
+} from '@/lib/form-abuse-controls';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -60,7 +73,59 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    // ── Abuse controls (audit H5) ─────────────────────────────────────────────────────────
+    // This endpoint is public and unauthenticated, and every accepted row fans out to an
+    // email, a webhook and the app integrations. The limits and the reasoning behind each
+    // number live in lib/form-abuse-controls.ts.
+    const clientIp = clientIpFrom(request.headers);
+
+    // Rate limit FIRST: it is the only check that costs nothing to run, and putting it ahead
+    // of the size check means a flood of oversized bodies still counts against the flooder
+    // rather than being refused for free.
+    const rateVerdict = submissionRateLimiter.check(clientIp);
+    if (!rateVerdict.allowed && rateVerdict.rule && rateVerdict.retryAfterSeconds) {
+      console.warn(
+        formatRateLimitRejection({
+          ip: clientIp,
+          rule: rateVerdict.rule,
+          retryAfterSeconds: rateVerdict.retryAfterSeconds,
+        })
+      );
+      return NextResponse.json(
+        { error: 'Too many submissions. Please try again shortly.' },
+        { status: 429, headers: { 'Retry-After': String(rateVerdict.retryAfterSeconds) } }
+      );
+    }
+
+    // Size cap, checked twice. content-length lets us refuse before buffering, but it is a
+    // claim the client makes — it can lie or be absent on a chunked request — so the body we
+    // actually read is measured too, in bytes rather than characters.
+    const declared = declaredBodyBytes(request.headers);
+    if (declared !== null && exceedsSizeCap(declared)) {
+      console.warn(
+        formatOversizeRejection({ bytes: declared, source: 'content-length', ip: clientIp })
+      );
+      return NextResponse.json(
+        { error: `Submission too large (limit ${MAX_SUBMISSION_BYTES} bytes)` },
+        { status: 413 }
+      );
+    }
+
+    const rawBody = await request.text();
+    const actualBytes = byteLengthOf(rawBody);
+    if (exceedsSizeCap(actualBytes)) {
+      console.warn(
+        formatOversizeRejection({ bytes: actualBytes, source: 'body', ip: clientIp })
+      );
+      return NextResponse.json(
+        { error: `Submission too large (limit ${MAX_SUBMISSION_BYTES} bytes)` },
+        { status: 413 }
+      );
+    }
+
+    // Unchanged behaviour: malformed JSON throws here exactly as `request.json()` used to,
+    // and lands in the same catch below.
+    const body = JSON.parse(rawBody);
 
     // Validate required fields
     if (!body.form_id) {
@@ -74,6 +139,28 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Missing or invalid field: payload' },
         { status: 400 }
+      );
+    }
+
+    // Honeypot: a field no human ever sees, so anything in it came from a script.
+    //
+    // The response is a normal 201 with `data: null` — byte-identical to the shape a real
+    // submission gets when the database write fails, so a bot learns nothing about whether it
+    // was caught and has no signal to tune against. Nothing is stored and nothing is notified;
+    // the structured trace is the only record, and it carries the payload so a false positive
+    // (see the collision note on HONEYPOT_FIELD) is recoverable rather than lost.
+    if (isHoneypotTripped(body.payload, HONEYPOT_FIELD)) {
+      console.warn(
+        formatHoneypotRejection({
+          formId: body.form_id,
+          field: HONEYPOT_FIELD,
+          payload: body.payload,
+          ip: clientIp,
+        })
+      );
+      return NextResponse.json(
+        { data: null, message: 'Form submitted successfully' },
+        { status: 201 }
       );
     }
 
