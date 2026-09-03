@@ -21,7 +21,6 @@ const PUBLIC_API_PREFIXES = [
 const PUBLIC_COLLECTION_ITEM_SUFFIXES = ['/items/filter', '/items/load-more'];
 
 const PUBLIC_API_EXACT = [
-  '/ycode/api/revalidate', // Cache revalidation — has own secret token auth
   '/ycode/api/oauth/register', // RFC 7591 Dynamic Client Registration — anonymous
   '/ycode/api/oauth/token',    // OAuth token exchange — auth is via PKCE/refresh
 ];
