@@ -323,6 +323,53 @@ export async function cleanupOrphanedChildRows(
 }
 
 /**
+ * Soft-deleted draft rows that still have a published counterpart, with names.
+ */
+export async function getDeletedDraftSummaries(
+  tableName: string,
+  nameColumn: 'name' | 'filename' = 'name'
+): Promise<Array<{ id: string; name: string }>> {
+  const client = await getSupabaseAdmin();
+  if (!client) throw new Error('Supabase not configured');
+
+  const deletedQuery = nameColumn === 'filename'
+    ? client.from(tableName).select('id, filename')
+    : client.from(tableName).select('id, name');
+
+  const { data: deletedDrafts, error: draftError } = await deletedQuery
+    .eq('is_published', false)
+    .not('deleted_at', 'is', null)
+    .limit(SUPABASE_QUERY_LIMIT);
+
+  if (draftError) {
+    throw new Error(`Failed to fetch deleted drafts from ${tableName}: ${draftError.message}`);
+  }
+
+  if (!deletedDrafts || deletedDrafts.length === 0) return [];
+
+  const drafts = deletedDrafts as Array<{ id: string; name?: string | null; filename?: string | null }>;
+
+  const { data: publishedRows, error: pubError } = await client
+    .from(tableName)
+    .select('id')
+    .in('id', drafts.map((draft) => draft.id))
+    .eq('is_published', true);
+
+  if (pubError) {
+    throw new Error(`Failed to fetch published rows pending deletion in ${tableName}: ${pubError.message}`);
+  }
+
+  const publishedIds = new Set((publishedRows || []).map((row) => row.id));
+
+  return drafts
+    .filter((draft) => publishedIds.has(draft.id))
+    .map((draft) => ({
+      id: draft.id,
+      name: (nameColumn === 'filename' ? draft.filename : draft.name)?.trim() || 'Untitled',
+    }));
+}
+
+/**
  * Count soft-deleted draft rows that still have a published counterpart.
  * Works for any table with (id, is_published, deleted_at) columns.
  */

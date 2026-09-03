@@ -6,7 +6,7 @@
  */
 
 import { getSupabaseAdmin, getTenantIdFromHeaders } from '@/lib/supabase-server';
-import { fetchAllRows } from '@/lib/supabase-constants';
+import { fetchAllRows, SUPABASE_WRITE_BATCH_SIZE } from '@/lib/supabase-constants';
 import { getKnexClient } from '@/lib/knex-client';
 import type { Translation, CreateTranslationData, UpdateTranslationData } from '@/types';
 
@@ -252,12 +252,15 @@ export async function getSlugTranslationsByLocale(
 }
 
 /**
- * Get translations by source (draft by default)
+ * Get translations by source (draft by default). Pass `localeId` to scope to a
+ * single locale — far cheaper than loading the whole locale catalogue just to
+ * annotate one page/component.
  */
 export async function getTranslationsBySource(
   sourceType: string,
   sourceId: string,
-  isPublished: boolean = false
+  isPublished: boolean = false,
+  localeId?: string,
 ): Promise<Translation[]> {
   const client = await getSupabaseAdmin();
 
@@ -265,14 +268,19 @@ export async function getTranslationsBySource(
     throw new Error('Supabase not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('translations')
     .select('*')
     .eq('source_type', sourceType)
     .eq('source_id', sourceId)
     .eq('is_published', isPublished)
-    .is('deleted_at', null)
-    .order('created_at', { ascending: true });
+    .is('deleted_at', null);
+
+  if (localeId) {
+    query = query.eq('locale_id', localeId);
+  }
+
+  const { data, error } = await query.order('created_at', { ascending: true });
 
   if (error) {
     throw new Error(`Failed to fetch translations: ${error.message}`);
@@ -531,12 +539,15 @@ export async function markTranslationsIncomplete(
 }
 
 /**
- * Upsert multiple translations (draft by default)
- * Uses batch upsert for efficiency
+ * Upsert multiple translations (draft by default). Chunks large arrays by
+ * {@link SUPABASE_WRITE_BATCH_SIZE} so callers can pass thousands of rows in one
+ * call without hitting Supabase's request-size limits.
  */
 export async function upsertTranslations(
   translations: CreateTranslationData[]
 ): Promise<Translation[]> {
+  if (translations.length === 0) return [];
+
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -557,18 +568,25 @@ export async function upsertTranslations(
     deleted_at: null, // Restore if previously deleted
   }));
 
-  const { data, error } = await client
-    .from('translations')
-    .upsert(translationsToUpsert, {
-      onConflict: 'locale_id,source_type,source_id,content_key,is_published',
-    })
-    .select();
+  const results: Translation[] = [];
 
-  if (error) {
-    throw new Error(`Failed to upsert translations: ${error.message}`);
+  for (let i = 0; i < translationsToUpsert.length; i += SUPABASE_WRITE_BATCH_SIZE) {
+    const chunk = translationsToUpsert.slice(i, i + SUPABASE_WRITE_BATCH_SIZE);
+    const { data, error } = await client
+      .from('translations')
+      .upsert(chunk, {
+        onConflict: 'locale_id,source_type,source_id,content_key,is_published',
+      })
+      .select();
+
+    if (error) {
+      throw new Error(`Failed to upsert translations: ${error.message}`);
+    }
+
+    if (data) results.push(...(data as Translation[]));
   }
 
-  return data || [];
+  return results;
 }
 
 /**

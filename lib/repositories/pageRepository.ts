@@ -6,6 +6,12 @@
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { reorderSiblings } from '@/lib/repositories/pageFolderRepository';
+import {
+  displayChangeName,
+  sortUnpublishedChanges,
+  type UnpublishedChange,
+  type UnpublishedChangeStatus,
+} from '@/lib/publish-changes';
 import type { Page, PageSettings } from '../../types';
 import { isHomepage } from '../page-utils';
 import { incrementSiblingOrders, fixOrphanedPageSlugs } from '../services/pageService';
@@ -1018,11 +1024,14 @@ function hashesDiffer(a: string | null, b: string | null): boolean {
   return a !== b;
 }
 
+export type UnpublishedPageChangeStatus = UnpublishedChangeStatus;
+export type UnpublishedPageChange = UnpublishedChange;
+
 /**
- * Get count of unpublished pages efficiently.
+ * Draft pages that differ from their published version (excludes soft-deletes).
  * Uses 2 bulk queries instead of N+1 per-page lookups.
  */
-export async function getUnpublishedPagesCount(): Promise<number> {
+async function getChangedDraftPageSummaries(): Promise<UnpublishedPageChange[]> {
   await backfillMissingPageHashes();
 
   const client = await getSupabaseAdmin();
@@ -1031,11 +1040,10 @@ export async function getUnpublishedPagesCount(): Promise<number> {
     throw new Error('Supabase not configured');
   }
 
-  // 2 bulk queries: all draft pages with layers + all published pages with layers
   const [draftResult, publishedResult] = await Promise.all([
     client
       .from('pages')
-      .select('id, content_hash, page_folder_id, is_publishable, page_layers!inner(content_hash)')
+      .select('id, name, content_hash, page_folder_id, is_publishable, page_layers!inner(content_hash)')
       .eq('is_published', false)
       .eq('page_layers.is_published', false)
       .is('deleted_at', null)
@@ -1054,10 +1062,9 @@ export async function getUnpublishedPagesCount(): Promise<number> {
   }
 
   if (!draftResult.data || draftResult.data.length === 0) {
-    return 0;
+    return [];
   }
 
-  // Build published lookup: id -> { content_hash, page_folder_id, layerHash }
   const publishedMap = new Map<string, {
     content_hash: string | null;
     page_folder_id: string | null;
@@ -1071,21 +1078,22 @@ export async function getUnpublishedPagesCount(): Promise<number> {
     });
   }
 
-  // Count pages needing publishing
-  let count = 0;
+  const changes: UnpublishedPageChange[] = [];
+
   for (const draft of draftResult.data) {
     const pub = publishedMap.get(draft.id);
     const isDraftOnly = (draft as { is_publishable?: boolean }).is_publishable === false;
+    const name = displayChangeName(draft.name);
 
     if (!pub) {
-      // Never published: only counts if it is meant to go live
-      if (!isDraftOnly) count++;
+      if (!isDraftOnly) {
+        changes.push({ id: draft.id, name, status: 'new' });
+      }
       continue;
     }
 
-    // Marked as draft but still live: will be removed on publish
     if (isDraftOnly) {
-      count++;
+      changes.push({ id: draft.id, name, status: 'unpublishing' });
       continue;
     }
 
@@ -1099,11 +1107,76 @@ export async function getUnpublishedPagesCount(): Promise<number> {
     const folderChanged = draft.page_folder_id !== pub.page_folder_id;
 
     if (pageMetadataChanged || layersChanged || folderChanged) {
-      count++;
+      changes.push({ id: draft.id, name, status: 'modified' });
     }
   }
 
-  return count;
+  return changes;
+}
+
+/**
+ * Soft-deleted draft pages that still have a published counterpart.
+ */
+async function getDeletedPageSummaries(): Promise<UnpublishedPageChange[]> {
+  const client = await getSupabaseAdmin();
+
+  if (!client) {
+    throw new Error('Supabase not configured');
+  }
+
+  const { data: deletedDrafts, error: draftError } = await client
+    .from('pages')
+    .select('id, name')
+    .eq('is_published', false)
+    .not('deleted_at', 'is', null);
+
+  if (draftError) {
+    throw new Error(`Failed to fetch deleted draft pages: ${draftError.message}`);
+  }
+
+  if (!deletedDrafts || deletedDrafts.length === 0) {
+    return [];
+  }
+
+  const { data: publishedRows, error: pubError } = await client
+    .from('pages')
+    .select('id')
+    .in('id', deletedDrafts.map((draft) => draft.id))
+    .eq('is_published', true);
+
+  if (pubError) {
+    throw new Error(`Failed to fetch published pages pending deletion: ${pubError.message}`);
+  }
+
+  const publishedIds = new Set((publishedRows || []).map((row) => row.id));
+
+  return deletedDrafts
+    .filter((draft) => publishedIds.has(draft.id))
+    .map((draft) => ({
+      id: draft.id,
+      name: displayChangeName(draft.name),
+      status: 'deleted' as const,
+    }));
+}
+
+/**
+ * Get count of unpublished pages efficiently (changed drafts only, not deletes).
+ */
+export async function getUnpublishedPagesCount(): Promise<number> {
+  const changes = await getChangedDraftPageSummaries();
+  return changes.length;
+}
+
+/**
+ * Named pages pending publish: new, modified, unpublishing, and deleted.
+ */
+export async function getUnpublishedPageChanges(): Promise<UnpublishedPageChange[]> {
+  const [changed, deleted] = await Promise.all([
+    getChangedDraftPageSummaries(),
+    getDeletedPageSummaries(),
+  ]);
+
+  return sortUnpublishedChanges([...changed, ...deleted]);
 }
 
 /**

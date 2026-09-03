@@ -20,12 +20,14 @@ import { removeSpaces } from '@/lib/utils';
 import { getFontAvailableWeights, FONT_WEIGHTS } from '@/lib/font-utils';
 import { buildBgImgVarName } from '@/lib/tailwind-class-mapper';
 import { isTextContentLayer } from '@/lib/layer-utils';
+import { DEFAULT_TEXT_SHADOW_VALUE } from '@/lib/text-shadow-utils';
 import type { Collection, CollectionField, Layer } from '@/types';
 import type { FieldGroup } from '@/lib/collection-field-utils';
 import ColorPropertyField from './ColorPropertyField';
 import FontPicker from './FontPicker';
 import TextBackgroundImageTab from './TextBackgroundImageTab';
 import type { TextBackgroundImageTabHandle } from './TextBackgroundImageTab';
+import TextShadowField from './TextShadowField';
 
 interface TypographyControlsProps {
   layer: Layer | null;
@@ -65,6 +67,7 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
   const underlineOffset = getDesignProperty('typography', 'underlineOffset') || '';
   const placeholderColor = getDesignProperty('typography', 'placeholderColor') || '';
   const lineClamp = getDesignProperty('typography', 'lineClamp') || '';
+  const textShadow = getDesignProperty('typography', 'textShadow') || '';
 
   // Get available weights for the selected font
   const selectedFont = getFontByFamily(fontFamily);
@@ -78,6 +81,8 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
 
   // Detect if line clamp is active
   const hasLineClamp = lineClamp !== '' && lineClamp !== 'none';
+
+  const hasTextShadow = textShadow !== '' && textShadow !== 'none';
 
   // Custom extractor for letter spacing (strips 'em' as default unit, like fontSize strips 'px')
   const extractLetterSpacingValue = (value: string): string => {
@@ -242,6 +247,18 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
     debouncedUpdateDesignProperty('typography', 'lineClamp', sanitized || null);
   };
 
+  const handleAddTextShadow = () => {
+    updateDesignProperty('typography', 'textShadow', DEFAULT_TEXT_SHADOW_VALUE);
+  };
+
+  const handleRemoveTextShadow = () => {
+    updateDesignProperty('typography', 'textShadow', null);
+  };
+
+  const handleTextShadowChange = (value: string) => {
+    updateDesignProperty('typography', 'textShadow', value);
+  };
+
   // Debounced handler for keyboard-typed hex values
   const handleDecorationColorChange = (value: string) => {
     const sanitized = removeSpaces(value);
@@ -347,6 +364,12 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
                 disabled={hasLineClamp}
               >
                 Line clamp
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={handleAddTextShadow}
+                disabled={hasTextShadow}
+              >
+                Shadow
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -686,6 +709,14 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
               </button>
             </div>
           </div>
+        )}
+
+        {!isIcon && hasTextShadow && (
+          <TextShadowField
+            value={textShadow}
+            onChange={handleTextShadowChange}
+            onRemove={handleRemoveTextShadow}
+          />
         )}
       </div>
     </div>

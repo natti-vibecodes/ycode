@@ -209,6 +209,10 @@ export const publishApi = {
     assets: number;
     translations: number;
     globalVariables: number;
+    changes: {
+      pages: { id: string; name: string; status: 'new' | 'modified' | 'deleted' | 'unpublishing' }[];
+      components: { id: string; name: string; status: 'new' | 'modified' | 'deleted' | 'unpublishing' }[];
+    };
     total: number;
   }>> {
     return apiRequest('/ycode/api/publish/preview');
@@ -647,14 +651,6 @@ export const collectionsApi = {
   // Unpublished items for a collection
   async getUnpublishedItems(collectionId: string): Promise<ApiResponse<CollectionItemWithValues[]>> {
     return apiRequest<CollectionItemWithValues[]>(`/ycode/api/collections/${collectionId}/items/unpublished`);
-  },
-
-  // Publish individual items
-  async publishItems(itemIds: string[]): Promise<ApiResponse<{ count: number }>> {
-    return apiRequest<{ count: number }>('/ycode/api/collections/items/publish', {
-      method: 'POST',
-      body: JSON.stringify({ item_ids: itemIds }),
-    });
   },
 
   // Bulk delete items

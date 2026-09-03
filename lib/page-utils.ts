@@ -729,6 +729,43 @@ export function buildPageTree(
 }
 
 /**
+ * Filter a page tree by a case-insensitive name query.
+ * Matching pages keep their ancestor folders so hierarchy stays visible.
+ * A folder whose name matches is kept with all of its children.
+ */
+export function filterPageTree(nodes: PageTreeNode[], query: string): PageTreeNode[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return nodes;
+
+  const filterNodes = (list: PageTreeNode[]): PageTreeNode[] => {
+    const result: PageTreeNode[] = [];
+
+    for (const node of list) {
+      const name = node.type === 'folder'
+        ? (node.data as PageFolder).name
+        : (node.data as Page).name;
+      const nameMatches = name.toLowerCase().includes(needle);
+
+      if (nameMatches) {
+        result.push(node);
+        continue;
+      }
+
+      if (node.children && node.children.length > 0) {
+        const filteredChildren = filterNodes(node.children);
+        if (filteredChildren.length > 0) {
+          result.push({ ...node, children: filteredChildren });
+        }
+      }
+    }
+
+    return result;
+  };
+
+  return filterNodes(nodes);
+}
+
+/**
  * Flatten a page tree structure into a linear array with depth information
  */
 export function flattenPageTree(

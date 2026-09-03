@@ -5,16 +5,19 @@
  */
 
 import { NextResponse } from 'next/server';
+import { headers } from 'next/headers';
 import { getSettingsByKeys } from '@/lib/repositories/settingsRepository';
 import { credentials } from '@/lib/credentials';
-import { getSiteBaseUrl } from '@/lib/url-utils';
+import { getRequestOrigin, getSiteBaseUrl } from '@/lib/url-utils';
 import type { SitemapSettings } from '@/types';
 
 export async function GET() {
   try {
+    const requestOrigin = getRequestOrigin(await headers());
+
     const hasSupabaseCredentials = await credentials.exists();
     if (!hasSupabaseCredentials) {
-      const baseUrl = getSiteBaseUrl() || '';
+      const baseUrl = getSiteBaseUrl({ requestOrigin }) || '';
       const fallback = `# Default robots.txt
 User-agent: *
 Allow: /
@@ -34,7 +37,7 @@ Sitemap: ${baseUrl}/sitemap.xml`;
     const allSettings = await getSettingsByKeys(['robots_txt', 'sitemap', 'global_canonical_url']);
     const sitemapSettings = allSettings.sitemap as SitemapSettings | null;
     const sitemapEnabled = sitemapSettings?.mode && sitemapSettings.mode !== 'none';
-    const baseUrl = getSiteBaseUrl({ globalCanonicalUrl: allSettings.global_canonical_url }) || '';
+    const baseUrl = getSiteBaseUrl({ globalCanonicalUrl: allSettings.global_canonical_url, requestOrigin }) || '';
 
     let content: string;
 

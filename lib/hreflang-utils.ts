@@ -7,7 +7,7 @@
  */
 
 import type { Locale, Page, PageFolder, Translation } from '@/types';
-import { buildSlugPath, buildLocalizedSlugPath } from './page-utils';
+import { buildSlugPath, buildLocalizedSlugPath, buildLocalizedDynamicPageUrl } from './page-utils';
 import { getTranslatableKey } from './locale-runtime';
 import { buildAbsolutePageUrl } from './url-utils';
 
@@ -23,10 +23,68 @@ export interface HreflangAlternate {
 export interface DynamicSlugContext {
   /** Collection item ID (translation source_id). */
   itemId: string;
-  /** Slug field ID (translation content_key). */
-  fieldId: string;
   /** Default-locale slug value used as the fallback. */
   defaultValue: string;
+}
+
+/**
+ * Content keys under which a CMS item's slug translation is stored. Slug-only
+ * translation loaders (`getSlugTranslationsByLocale`) only ever return these,
+ * so URL builders resolve translated slugs by trying both formats.
+ */
+const CMS_SLUG_CONTENT_KEYS = ['field:key:slug', 'slug'] as const;
+
+/**
+ * Return a CMS item's translated slug for a locale, or `undefined` when none
+ * exists. Handles both the current (`field:key:slug`) and legacy (`slug`)
+ * content-key formats.
+ */
+export function getTranslatedItemSlug(
+  translations: Record<string, Translation> | undefined,
+  itemId: string
+): string | undefined {
+  for (const contentKey of CMS_SLUG_CONTENT_KEYS) {
+    const key = getTranslatableKey({ source_type: 'cms', source_id: itemId, content_key: contentKey });
+    const value = translations?.[key]?.content_value;
+    if (value) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Resolve a CMS item's translated slug for a locale, falling back to the
+ * default-locale slug when no translation exists.
+ */
+function resolveTranslatedSlug(
+  translations: Record<string, Translation> | undefined,
+  itemId: string,
+  fallback: string
+): string {
+  return getTranslatedItemSlug(translations, itemId) ?? fallback;
+}
+
+/**
+ * Resolve the canonical localized path for a dynamic CMS item when the current
+ * request used an off-canonical slug (e.g. the default slug under a locale that
+ * has a translated slug, producing duplicate URLs). Returns `null` when the
+ * request is already canonical or the item has no translated slug for the
+ * locale.
+ */
+export function getOffCanonicalDynamicRedirect(params: {
+  page: Page;
+  folders: PageFolder[];
+  locale: Locale | null | undefined;
+  translations: Record<string, Translation> | undefined;
+  itemId: string;
+  currentPath: string;
+}): string | null {
+  const { page, folders, locale, translations, itemId, currentPath } = params;
+
+  const translatedSlug = getTranslatedItemSlug(translations, itemId);
+  if (!translatedSlug) return null;
+
+  const canonicalPath = buildLocalizedDynamicPageUrl(page, folders, translatedSlug, locale, translations);
+  return canonicalPath && canonicalPath !== currentPath ? canonicalPath : null;
 }
 
 /** Build the default-locale absolute URL for a dynamic item. */
@@ -59,12 +117,7 @@ function buildDynamicLocalizedUrl(
     ''
   ).replace(/\/$/, '');
 
-  const translatedSlugKey = getTranslatableKey({
-    source_type: 'cms',
-    source_id: dynamicSlug.itemId,
-    content_key: dynamicSlug.fieldId,
-  });
-  const translatedSlug = translations?.[translatedSlugKey]?.content_value || dynamicSlug.defaultValue;
+  const translatedSlug = resolveTranslatedSlug(translations, dynamicSlug.itemId, dynamicSlug.defaultValue);
 
   const localizedItemPath = localizedFolderPath
     ? `${localizedFolderPath}/${translatedSlug}`

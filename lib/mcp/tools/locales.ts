@@ -9,6 +9,8 @@ import {
 } from '@/lib/repositories/localeRepository';
 import {
   getTranslationsByLocale,
+  getTranslationsBySource,
+  getCmsTranslationsForItems,
   createTranslation,
   updateTranslation,
   deleteTranslation,
@@ -133,24 +135,33 @@ export function registerLocaleTools(server: McpServer) {
 
   server.tool(
     'list_translations',
-    'List all translations for a specific locale.',
+    'List existing translations for a specific locale. Optionally filter by source type or completion status to keep the response small.',
     {
       locale_id: z.string().describe('The locale ID to get translations for'),
+      source_type: z.enum(['page', 'folder', 'component', 'cms']).optional().describe('Only return translations for this source type'),
+      completed: z.boolean().optional().describe('Filter by completion status (true = completed only, false = drafts only)'),
     },
-    async ({ locale_id }) => {
+    async ({ locale_id, source_type, completed }) => {
       const translations = await getTranslationsByLocale(locale_id);
+      const filtered = translations.filter((t) =>
+        (source_type === undefined || t.source_type === source_type) &&
+        (completed === undefined || t.is_completed === completed),
+      );
       return {
         content: [{
           type: 'text' as const,
-          text: JSON.stringify(translations.map((t) => ({
-            id: t.id,
-            source_type: t.source_type,
-            source_id: t.source_id,
-            content_key: t.content_key,
-            content_type: t.content_type,
-            content_value: t.content_value,
-            is_completed: t.is_completed,
-          })), null, 2),
+          text: JSON.stringify({
+            count: filtered.length,
+            translations: filtered.map((t) => ({
+              id: t.id,
+              source_type: t.source_type,
+              source_id: t.source_id,
+              content_key: t.content_key,
+              content_type: t.content_type,
+              content_value: t.content_value,
+              is_completed: t.is_completed,
+            })),
+          }),
         }],
       };
     },
@@ -194,21 +205,38 @@ export function registerLocaleTools(server: McpServer) {
 
   server.tool(
     'batch_set_translations',
-    'Create or update multiple translations at once. Efficient for translating many content keys.',
+    `Create or update up to 1000 translations in one call — the most efficient way to translate a lot of content. Set the top-level locale_id once and omit it from each item (only override it per item when writing multiple locales at once). Rich text: pass content_type "richtext" with content_value as a JSON-stringified Tiptap doc (or use set_rich_text_translation for a single block-based field).`,
     {
+      locale_id: z.string().optional().describe('Default locale ID applied to every item that omits its own locale_id. Set this once instead of repeating it on each item.'),
       translations: z.array(z.object({
-        locale_id: z.string(),
+        locale_id: z.string().optional().describe('Overrides the top-level locale_id for this item'),
         source_type: z.enum(['page', 'folder', 'component', 'cms']),
         source_id: z.string(),
         content_key: z.string(),
         content_type: z.enum(['text', 'richtext', 'asset_id']).optional(),
         content_value: z.string(),
         is_completed: z.boolean().optional(),
-      })).min(1).max(100).describe('Array of translations to upsert (max 100)'),
+      })).min(1).max(1000).describe('Array of translations to upsert (max 1000)'),
     },
-    async ({ translations }) => {
+    async ({ locale_id, translations }) => {
+      // Each item's locale_id falls back to the shared top-level one. Report any
+      // item missing both so the whole batch is rejected before writing.
+      const missingLocale = translations
+        .map((t, i) => ({ i, key: t.content_key, hasLocale: !!(t.locale_id || locale_id) }))
+        .filter((e) => !e.hasLocale)
+        .map((e) => `[${e.i}] "${e.key}"`);
+      if (missingLocale.length > 0) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `Error: ${missingLocale.length} item(s) have no locale_id (and no top-level locale_id was provided): ${missingLocale.join(', ')}`,
+          }],
+          isError: true,
+        };
+      }
+
       const data = translations.map((t) => ({
-        locale_id: t.locale_id,
+        locale_id: (t.locale_id || locale_id) as string,
         source_type: t.source_type as 'page' | 'folder' | 'component' | 'cms',
         source_id: t.source_id,
         content_key: t.content_key,
@@ -237,7 +265,7 @@ export function registerLocaleTools(server: McpServer) {
       return {
         content: [{
           type: 'text' as const,
-          text: JSON.stringify({ message: `Saved ${result.length} translations`, count: result.length }, null, 2),
+          text: JSON.stringify({ message: `Saved ${result.length} translations`, count: result.length }),
         }],
       };
     },
@@ -282,17 +310,33 @@ export function registerLocaleTools(server: McpServer) {
 
   server.tool(
     'list_translatable_content',
-    `Discover exactly what can be translated for a page, component, or CMS collection — and the precise source_type/source_id/content_key/content_type to use with set_translation. Use this BEFORE translating so you never have to guess keys. Pass locale_id to also see which items already have a translation and their current value.`,
+    `Discover exactly what can be translated for a page, component, or CMS collection — and the precise source_type/source_id/content_key/content_type to use with set_translation. Use this BEFORE translating so you never have to guess keys. Pass locale_id to annotate each item with its existing translation, and untranslated_only to return only the items still needing a translation (skips already-done work — the cheapest way to resume or translate a new locale).`,
     {
       source_type: z.enum(['page', 'component', 'cms']).describe('What to inspect: a page, a component, or a CMS collection'),
       source_id: z.string().describe('Page ID, component ID, or collection ID (for cms)'),
       locale_id: z.string().optional().describe('Optional locale ID to annotate each item with its existing translation status/value'),
+      untranslated_only: z.boolean().optional().describe('Requires locale_id. Only return items with no completed translation yet. Use this to avoid re-sending content that is already translated.'),
       search: z.string().optional().describe('CMS only: filter collection items by search term'),
       limit: z.number().optional().describe('CMS only: max collection items to scan (default 25)'),
+      offset: z.number().optional().describe('CMS only: skip this many collection items — paginate large collections with limit + offset'),
     },
-    async ({ source_type, source_id, locale_id, search, limit }) => {
+    async ({ source_type, source_id, locale_id, untranslated_only, search, limit, offset }) => {
+      if (untranslated_only && !locale_id) {
+        return { content: [{ type: 'text' as const, text: 'Error: untranslated_only requires locale_id.' }], isError: true };
+      }
+
       let items: TranslatableItem[] = [];
       let total: number | undefined;
+      // Existing translations for the requested locale, scoped to just this
+      // source (page/component/scanned CMS items) — avoids loading the entire
+      // locale catalogue on every discovery call.
+      let existingByKey: Map<string, { value: string; is_completed: boolean }> | null = null;
+
+      const buildExistingMap = (translations: { content_value: string; is_completed: boolean; source_type: string; source_id: string; content_key: string }[]) =>
+        new Map(translations.map((t) => [
+          getTranslatableKey(t),
+          { value: t.content_value, is_completed: t.is_completed },
+        ]));
 
       if (source_type === 'page') {
         const page = await getPageById(source_id);
@@ -304,6 +348,9 @@ export function registerLocaleTools(server: McpServer) {
         // "Component › Variable" labels instead of falling back to layer names.
         const components = await getAllComponents(false).catch(() => []);
         items = extractPageTranslatableItems(page, layers, undefined, components);
+        if (locale_id) {
+          existingByKey = buildExistingMap(await getTranslationsBySource('page', source_id, false, locale_id));
+        }
       } else if (source_type === 'component') {
         const component = await getComponentById(source_id);
         if (!component) {
@@ -312,33 +359,33 @@ export function registerLocaleTools(server: McpServer) {
         const variants = component.variants as ComponentVariant[] | undefined;
         const layers = (variants?.[0]?.layers || (component.layers as Layer[]) || []);
         items = extractComponentTranslatableItems({ id: component.id, name: component.name }, layers);
+        if (locale_id) {
+          existingByKey = buildExistingMap(await getTranslationsBySource('component', source_id, false, locale_id));
+        }
       } else {
         const fields = await getFieldsByCollectionId(source_id);
+        // Push pagination into the query instead of fetching the whole
+        // collection and slicing — critical for large CMS catalogues.
         const { items: collectionItems, total: itemTotal } = await getItemsWithValues(
           source_id,
           false,
-          search ? { search } : undefined,
+          { ...(search ? { search } : {}), limit: limit ?? 25, offset: offset ?? 0 },
         );
         total = itemTotal;
-        const scoped = collectionItems.slice(0, limit ?? 25);
-        for (const item of scoped) {
+        for (const item of collectionItems) {
           items.push(...extractCmsTranslatableItems(
             { id: item.id, collection_id: source_id, values: item.values },
             fields,
           ));
         }
+        if (locale_id) {
+          existingByKey = buildExistingMap(
+            await getCmsTranslationsForItems(locale_id, false, collectionItems.map((i) => i.id)),
+          );
+        }
       }
 
-      // Annotate with existing translations for the given locale, if requested.
-      let existingByKey: Map<string, { value: string; is_completed: boolean }> | null = null;
-      if (locale_id) {
-        const translations = await getTranslationsByLocale(locale_id);
-        existingByKey = new Map(
-          translations.map((t) => [getTranslatableKey(t), { value: t.content_value, is_completed: t.is_completed }]),
-        );
-      }
-
-      const result = items.map((item) => {
+      let result = items.map((item) => {
         const existing = existingByKey?.get(item.key);
         return {
           source_type: item.source_type,
@@ -353,14 +400,18 @@ export function registerLocaleTools(server: McpServer) {
         };
       });
 
+      if (untranslated_only) {
+        result = result.filter((item) => !item.has_translation || !item.is_completed);
+      }
+
       return {
         content: [{
           type: 'text' as const,
           text: JSON.stringify({
             count: result.length,
-            ...(total !== undefined ? { collection_items_total: total, scanned_items: Math.min(total, limit ?? 25) } : {}),
+            ...(total !== undefined ? { collection_items_total: total, scanned_items: Math.min(total, (offset ?? 0) + (limit ?? 25)) - (offset ?? 0) } : {}),
             items: result,
-          }, null, 2),
+          }),
         }],
       };
     },

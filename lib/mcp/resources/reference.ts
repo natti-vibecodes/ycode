@@ -144,6 +144,11 @@ const DESIGN_REFERENCE_JSON = JSON.stringify({
       letterSpacing: { type: 'css_value', examples: ['-0.03em', '0'] },
       textAlign: { type: 'enum', values: ['left', 'center', 'right'] },
       color: { type: 'color', examples: ['#171717', '#ffffff'] },
+      textShadow: {
+        type: 'string',
+        description: 'CSS text-shadow with underscores between values. Apply on the text/heading/button layer.',
+        examples: ['0px_1px_2px_rgba(0,0,0,0.4)', 'sm', 'lg'],
+      },
     },
     spacing: { padding: { type: 'css_value' }, margin: { type: 'css_value' } },
     sizing: {
@@ -168,6 +173,11 @@ const DESIGN_REFERENCE_JSON = JSON.stringify({
     effects: {
       opacity: { type: 'string' },
       boxShadow: { type: 'string' },
+      cursor: {
+        type: 'enum',
+        values: ['auto', 'default', 'pointer', 'text', 'grab', 'wait', 'not-allowed'],
+        description: 'Set on the clickable layer itself (button, link, card), not a nested text child.',
+      },
     },
     positioning: {
       position: { type: 'enum', values: ['relative', 'absolute', 'fixed', 'sticky'] },

@@ -37,6 +37,7 @@ import BackgroundsControls from './BackgroundsControls';
 import CustomAttributeRow from './CustomAttributeRow';
 import BorderControls from './BorderControls';
 import ComponentVariablesDialog from './ComponentVariablesDialog';
+import CursorControls from './CursorControls';
 import EffectControls from './EffectControls';
 import CollectionFiltersSettings from './CollectionFiltersSettings';
 import ConditionalVisibilitySettings from './ConditionalVisibilitySettings';
@@ -621,6 +622,10 @@ const RightSidebar = React.memo(function RightSidebar({
       case 'effects':
         // Effect controls (opacity, shadow): show for all elements
         // Opacity is useful in text edit mode for transparency
+        return true;
+
+      case 'cursor':
+        if (showTextStyleControls) return false;
         return true;
 
       case 'position':
@@ -2065,6 +2070,10 @@ const RightSidebar = React.memo(function RightSidebar({
             <SizingControls layer={controlLayer} onLayerUpdate={controlUpdate} />
           )}
 
+          {shouldShowControl('position', selectedLayer) && !showTextStyleControls && (
+            <PositionControls layer={controlLayer} onLayerUpdate={controlUpdate} />
+          )}
+
           {shouldShowControl('typography', selectedLayer) && (
             <TypographyControls
               layer={controlLayer}
@@ -2106,8 +2115,11 @@ const RightSidebar = React.memo(function RightSidebar({
             />
           )}
 
-          {shouldShowControl('position', selectedLayer) && !showTextStyleControls && (
-            <PositionControls layer={controlLayer} onLayerUpdate={controlUpdate} />
+          {shouldShowControl('cursor', selectedLayer) && (
+            <CursorControls
+              layer={controlLayer}
+              onLayerUpdate={controlUpdate}
+            />
           )}
 
           {shouldShowControl('transforms', selectedLayer) && (
@@ -2305,6 +2317,10 @@ const RightSidebar = React.memo(function RightSidebar({
                             onExpand={isRichTextElementContent && selectedLayerId
                               ? () => openRichTextSheet(selectedLayerId)
                               : undefined}
+                            fieldGroups={fieldGroups}
+                            allFields={fields}
+                            collections={collections}
+                            layer={selectedLayer}
                           />
                         );
                       })}

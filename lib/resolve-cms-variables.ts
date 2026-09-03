@@ -12,7 +12,8 @@ import type { FieldVariable, CollectionItemWithValues, CollectionField } from '@
 import { isValidUUID } from '@/lib/utils';
 import { stripEmptyJsonLd } from '@/lib/strip-empty-json-ld';
 import { getAssetProxyUrl } from '@/lib/asset-utils';
-import { isAssetFieldType, isMultipleAssetField } from '@/lib/collection-field-utils';
+import { formatFieldValue } from '@/lib/cms-variables-utils';
+import { isAssetFieldType, isDateFieldType, isMultipleAssetField } from '@/lib/collection-field-utils';
 import { buildAbsoluteAssetUrl, getSiteBaseUrl } from '@/lib/url-utils';
 
 // Re-export client-safe inline variable resolver
@@ -61,12 +62,20 @@ async function resolveFieldDisplayValue(
     return buildAbsoluteAssetUrl(await getBaseUrl(), url) ?? url;
   }
 
-  // Belt and suspenders. `castValue` used to speculatively JSON.parse any text field starting
-  // with `{` or `[`, so a field holding JSON-LD arrived here as an OBJECT and String() yielded
-  // the literal "[object Object]" inside an ld+json tag — structurally invalid schema, shipped
-  // silently (SCA-1282). SCA-1283 removed that parse at the source, so nothing should reach this
-  // branch now. It stays anyway: `String(someObject)` is never the intended output anywhere, so
-  // this can only improve a call site, never change a working one.
+  // Rich text is stored as a Tiptap object; serialize to plain text instead of
+  // "[object Object]". Other field types keep their raw stored string so values
+  // like ISO dates remain intact for JSON-LD and other custom code.
+  // (upstream 419b82d — the specific case, handled first)
+  if (field.type === 'rich_text') {
+    return formatFieldValue(rawValue, field.type);
+  }
+
+  // Belt and suspenders for every OTHER field type. `castValue` used to speculatively JSON.parse
+  // any text field starting with `{` or `[`, so a field holding JSON-LD arrived here as an OBJECT
+  // and String() yielded the literal "[object Object]" inside an ld+json tag — structurally
+  // invalid schema, shipped silently (SCA-1282). SCA-1283 removed that parse at the source, so
+  // nothing should reach this branch now. It stays anyway: `String(someObject)` is never the
+  // intended output anywhere, so this can only improve a call site, never change a working one.
   if (typeof rawValue === 'object') {
     try {
       return JSON.stringify(rawValue);
@@ -140,6 +149,32 @@ async function resolvePlaceholderToken(
 }
 
 /**
+ * Return the item with its top-level date fields replaced by their raw stored
+ * ISO values. Item date values are pre-formatted for display (e.g. "Aug 20,
+ * 2026"), but custom code (JSON-LD, scripts) needs machine-readable ISO 8601.
+ * Other values (including translated text) are preserved.
+ */
+async function withRawDateFieldValues(
+  collectionItem: CollectionItemWithValues,
+  fields: CollectionField[],
+  isPublished: boolean,
+  tenantId?: string
+): Promise<CollectionItemWithValues> {
+  const dateFieldIds = fields.filter(field => isDateFieldType(field.type)).map(field => field.id);
+  if (dateFieldIds.length === 0) return collectionItem;
+
+  const { getItemWithValues } = await import('@/lib/repositories/collectionItemRepository');
+  const rawItem = await getItemWithValues(collectionItem.id, isPublished, tenantId);
+  if (!rawItem) return collectionItem;
+
+  const values = { ...collectionItem.values };
+  for (const fieldId of dateFieldIds) {
+    if (rawItem.values[fieldId] != null) values[fieldId] = rawItem.values[fieldId];
+  }
+  return { ...collectionItem, values };
+}
+
+/**
  * Resolve {{FieldName}} placeholders in custom code with actual field values.
  * Asset fields resolve to their public URL and references support the
  * {{ReferenceField.NestedField}} syntax. Unknown fields are left untouched.
@@ -153,18 +188,30 @@ export async function resolveCustomCodePlaceholders(
   isPublished: boolean = false,
   options: ResolveCustomCodeOptions = {}
 ): Promise<string> {
-  if (!collectionItem || !collectionItem.values || !fields.length) {
+  if (!collectionItem || !collectionItem.values || !fields.length || !code.includes('{{')) {
     // Still strip: a hand-authored empty schema block is just as empty as a resolved one.
+    // NOTE: upstream's `!code.includes('{{')` fast path returns `code` untouched; we must NOT,
+    // because token-less code is exactly the hand-authored-empty-schema case stripEmptyJsonLd
+    // exists for. Keeping the strip on this branch is deliberate.
     return stripEmptyJsonLd(code);
   }
 
-  const fieldsByName = new Map(fields.map(field => [field.name, field]));
-
+  // Custom code emits machine-readable output, so resolve against raw ISO dates
+  // rather than the display-formatted values used for on-page rendering.
+  //
   // Placeholders in custom code are overwhelmingly machine-readable output — JSON-LD, meta tags,
   // feeds — so they read the PRE-FORMAT values. `values` carries display dates ("Aug 12, 2026"),
-  // which shipped structurally invalid `datePublished` on every article until SCA-1294. Falls
-  // back to `values` where no formatting pass ran and the two are identical anyway.
-  const itemValues = collectionItem.rawValues ?? collectionItem.values;
+  // which shipped structurally invalid `datePublished` on every article until SCA-1294.
+  //
+  // Two mechanisms solve this; we prefer ours. `rawValues` is already carried by the fetcher, so
+  // it costs no query and covers EVERY field type, not just dates. Upstream's
+  // `withRawDateFieldValues` (419b82d) re-reads the item from the database and patches date
+  // fields only — kept as the fallback for items that arrive without `rawValues`.
+  const effectiveItem = collectionItem.rawValues
+    ? { ...collectionItem, values: collectionItem.rawValues }
+    : await withRawDateFieldValues(collectionItem, fields, isPublished, options.tenantId);
+
+  const fieldsByName = new Map(fields.map(field => [field.name, field]));
 
   // Resolve the site base URL at most once, and only when an asset placeholder
   // actually needs to be absolutized.
@@ -179,7 +226,7 @@ export async function resolveCustomCodePlaceholders(
   for (const [, rawToken] of code.matchAll(PLACEHOLDER_REGEX)) {
     const token = rawToken.trim();
     if (resolvedTokens.has(token)) continue;
-    resolvedTokens.set(token, await resolvePlaceholderToken(token, itemValues, fieldsByName, isPublished, getBaseUrl, options.tenantId));
+    resolvedTokens.set(token, await resolvePlaceholderToken(token, effectiveItem.values, fieldsByName, isPublished, getBaseUrl, options.tenantId));
   }
 
   const resolved = code.replace(PLACEHOLDER_REGEX, (match, rawToken) => {

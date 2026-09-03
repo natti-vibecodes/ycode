@@ -6,16 +6,48 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import Icon from '@/components/ui/icon';
 import FileManagerDialog from './FileManagerDialog';
-import { extractPlainTextFromTiptap, extractMultilinePlainTextFromTiptap } from '@/lib/tiptap-utils';
-import { stringToTiptapContent } from '@/lib/text-format-utils';
+import RichTextEditor from './RichTextEditor';
+import { extractMultilinePlainTextFromTiptap } from '@/lib/tiptap-utils';
 import { useAsset } from '@/hooks/use-asset';
 import { useAssetsStore } from '@/stores/useAssetsStore';
 import { getAssetIcon, isAssetOfType, getAssetCategoryFromMimeType, ASSET_CATEGORIES } from '@/lib/asset-utils';
 import { buildAssetFolderPath } from '@/lib/asset-folder-utils';
+import { SIMPLE_TEXT_FIELD_TYPES } from '@/lib/collection-field-utils';
 import { toast } from 'sonner';
+import type { FieldGroup } from '@/lib/collection-field-utils';
 import type { TranslatableItem } from '@/lib/localisation-utils';
-import type { Translation, CreateTranslationData, UpdateTranslationData, Asset, AssetCategory } from '@/types';
+import type { Translation, CreateTranslationData, UpdateTranslationData, Asset, AssetCategory, Collection, CollectionField, Layer } from '@/types';
 import type { IconProps } from '@/components/ui/icon';
+
+/** Empty Tiptap document used when a rich-text field has no content yet. */
+const EMPTY_RICH_TEXT_DOC = { type: 'doc', content: [{ type: 'paragraph' }] } as const;
+
+/** Parse a stored rich-text string into a Tiptap doc, falling back to an empty doc. */
+function parseRichTextDoc(value: string): Record<string, unknown> {
+  if (value) {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {
+      // Not valid JSON — treat as empty so the editor stays usable.
+    }
+  }
+  return { ...EMPTY_RICH_TEXT_DOC };
+}
+
+/** True when a serialized Tiptap doc carries no text/variable content. */
+function isEmptyRichTextValue(value: string): boolean {
+  if (!value) return true;
+  try {
+    const doc = JSON.parse(value);
+    if (!doc || !Array.isArray(doc.content)) return true;
+    return !doc.content.some((block: { content?: unknown[] }) =>
+      Array.isArray(block.content) && block.content.length > 0
+    );
+  } catch {
+    return !value.trim();
+  }
+}
 
 interface SidebarTranslationRowProps {
   item: TranslatableItem;
@@ -41,18 +73,21 @@ interface SidebarTranslationRowProps {
   previewOnly?: boolean;
   /** Click handler for the "Expand to edit" button shown in preview-only mode. */
   onExpand?: () => void;
+  /** Field context passed to the rich-text editor for inline CMS variables. */
+  fieldGroups?: FieldGroup[];
+  allFields?: Record<string, CollectionField[]>;
+  collections?: Collection[];
+  /** The layer being translated, for rich-text editor context. */
+  layer?: Layer | null;
 }
 
 /**
  * Right-sidebar translation editor for a single (item, side) pair.
  *
- * A deliberately simpler take on `TranslationRow`: stacked plain `Textarea`s,
- * no rich-text editor, no completion toggle, no slug validation. Used while
- * the user is browsing the canvas in a non-default locale.
- *
- * Rich-text values (Tiptap JSON) are flattened to plain text for display and
- * re-wrapped into a Tiptap doc on save so the rendering pipeline keeps getting
- * a valid rich_text content shape.
+ * A lighter take on `TranslationRow` (no completion toggle or slug validation)
+ * used while browsing the canvas in a non-default locale. Rich-text values are
+ * edited with the shared `RichTextEditor` so line breaks and inline marks are
+ * preserved; plain-text and asset values fall back to a `Textarea` / picker.
  */
 export default function SidebarTranslationRow({
   item,
@@ -66,6 +101,10 @@ export default function SidebarTranslationRow({
   updateTranslation,
   previewOnly = false,
   onExpand,
+  fieldGroups,
+  allFields,
+  collections,
+  layer,
 }: SidebarTranslationRowProps) {
   const [isAssetPickerOpen, setIsAssetPickerOpen] = useState(false);
 
@@ -102,19 +141,12 @@ export default function SidebarTranslationRow({
     }
   })();
 
-  // Display value for the source textarea: convert Tiptap JSON → plain text so
-  // the user sees readable content instead of raw JSON for rich-text fields.
-  // In preview-only mode (rich-text element layers) we keep block-level
-  // structure as newlines so headings/paragraphs render the way they do on
-  // the canvas; the editable textarea path stays single-line so it round-trips
-  // cleanly through stringToTiptapContent on save.
+  // Plain-text projection of the source, kept as multi-line so line breaks show
+  // up. Used for the preview textarea and as the rich-text editor placeholder.
   const sourceDisplayValue = (() => {
     if (!isSourceRichText || !item.content_value) return item.content_value || '';
     try {
-      const parsed = JSON.parse(item.content_value);
-      return previewOnly
-        ? extractMultilinePlainTextFromTiptap(parsed)
-        : extractPlainTextFromTiptap(parsed);
+      return extractMultilinePlainTextFromTiptap(JSON.parse(item.content_value));
     } catch {
       return item.content_value;
     }
@@ -128,13 +160,20 @@ export default function SidebarTranslationRow({
     }
     if (!isTranslationRichText || !storeValue) return storeValue || '';
     try {
-      const parsed = JSON.parse(storeValue);
-      return previewOnly
-        ? extractMultilinePlainTextFromTiptap(parsed)
-        : extractPlainTextFromTiptap(parsed);
+      return extractMultilinePlainTextFromTiptap(JSON.parse(storeValue));
     } catch {
       return storeValue;
     }
+  })();
+
+  // Rich-text items are edited with the same RichTextEditor used on the
+  // localization page, so paragraph structure and inline marks survive the
+  // round-trip instead of being flattened to a single plain paragraph.
+  const sourceDoc = isSourceRichText ? parseRichTextDoc(item.content_value) : null;
+  const translationDoc = (() => {
+    const local = localInputValues[item.key];
+    if (local !== undefined) return parseRichTextDoc(local);
+    return parseRichTextDoc(storeValue);
   })();
 
   const sourceAsset = useAsset(isAsset ? item.content_value : null);
@@ -145,34 +184,16 @@ export default function SidebarTranslationRow({
     : null;
   const assetFolders = useAssetsStore((state) => state.folders);
 
-  const handleTextChange = (value: string) => {
-    onLocalValueChange(item.key, value);
-  };
-
-  const handleTextBlur = (value: string) => {
+  // Persist a translation value. The simplified sidebar flow has no explicit
+  // "complete" toggle — saving any value here means the user committed it, so
+  // we mark it completed so injectTranslatedText / runtime rendering picks it
+  // up. Partial translations created elsewhere also flip to completed here.
+  const saveTranslationValue = (
+    finalValue: string,
+    contentType: CreateTranslationData['content_type']
+  ) => {
     if (!selectedLocaleId) return;
 
-    // Re-wrap plain text into Tiptap JSON for rich_text fields so the
-    // rendering pipeline still receives a valid rich_text payload. Use the
-    // translation's actual stored content_type so an existing richtext row
-    // (e.g. legacy-migrated) keeps its shape on edit instead of being
-    // silently downgraded to a plain string.
-    const finalValue = isTranslationRichText
-      ? JSON.stringify(stringToTiptapContent(value))
-      : value;
-
-    onLocalValueClear(item.key);
-
-    // Skip the round-trip when nothing actually changed (handles the case
-    // where the user focuses then blurs without editing).
-    const previousValue = storeValue;
-    if (finalValue === previousValue) return;
-    if (!finalValue && !previousValue) return;
-
-    // The simplified sidebar flow has no explicit "complete" toggle — saving
-    // any value here means the user committed it, so we mark it completed so
-    // injectTranslatedText / runtime rendering picks it up. Partial translations
-    // that were created elsewhere also flip to completed on first save here.
     const savePromise = translation
       ? updateTranslation(translation, { content_value: finalValue, is_completed: true })
       : createTranslation({
@@ -180,12 +201,67 @@ export default function SidebarTranslationRow({
         source_type: item.source_type as CreateTranslationData['source_type'],
         source_id: item.source_id,
         content_key: item.content_key,
-        content_type: item.content_type as CreateTranslationData['content_type'],
+        content_type: contentType,
         content_value: finalValue,
         is_completed: true,
       });
 
     savePromise.catch((error) => console.error('Failed to save translation:', error));
+  };
+
+  const handleTextChange = (value: string) => {
+    onLocalValueChange(item.key, value);
+  };
+
+  const handleTextBlur = (value: string) => {
+    if (!selectedLocaleId) return;
+
+    onLocalValueClear(item.key);
+
+    // Skip the save when nothing actually changed (handles focus-then-blur).
+    const previousValue = storeValue;
+    if (value === previousValue) return;
+    if (!value && !previousValue) return;
+
+    saveTranslationValue(value, item.content_type as CreateTranslationData['content_type']);
+  };
+
+  // Rich-text edits stream Tiptap JSON. Serialize to a string for storage and
+  // keep the in-flight value in local state so the field stays controlled.
+  const handleRichChange = (value: unknown) => {
+    onLocalValueChange(
+      item.key,
+      typeof value === 'object' ? JSON.stringify(value) : String(value ?? '')
+    );
+  };
+
+  const handleRichBlur = (value: unknown) => {
+    if (!selectedLocaleId) return;
+
+    // Only persist when the user actually edited this field in-session. Without
+    // this guard, a blur on an editor that hasn't received its value yet (or was
+    // never touched) could overwrite an existing translation with empty content.
+    const userEdited = localInputValues[item.key] !== undefined;
+
+    const finalValue = typeof value === 'object' ? JSON.stringify(value) : String(value ?? '');
+
+    onLocalValueClear(item.key);
+
+    if (!userEdited) return;
+
+    const previousValue = storeValue;
+    if (finalValue === previousValue) return;
+
+    // Clearing a translation reverts to the source: store '' (which the renderer
+    // treats as "use original") instead of an empty Tiptap doc, matching the
+    // localization page behavior.
+    if (isEmptyRichTextValue(finalValue)) {
+      if (!previousValue) return;
+      saveTranslationValue('', 'richtext');
+      return;
+    }
+
+    saveTranslationValue(finalValue, 'richtext');
   };
 
   const handleAssetSelect = (asset: Asset): void | false => {
@@ -282,6 +358,12 @@ export default function SidebarTranslationRow({
   // by default, which auto-grows).
   const textareaClass = 'resize-none max-h-32 overflow-y-auto';
 
+  // Match the plain Textarea box (padding, min/max height) so the rich-text
+  // editor blends in with the other sidebar fields. The editor already supplies
+  // its own `bg-input rounded-lg border-transparent` frame in the compact
+  // variant, so we only override sizing here.
+  const richEditorClass = 'min-h-16 max-h-32 overflow-y-auto px-3 py-2';
+
   return (
     <div className="flex flex-col gap-1.5">
       {propertyLabel && (
@@ -295,6 +377,21 @@ export default function SidebarTranslationRow({
           <div className="flex items-center gap-2 p-2 border border-border/50 rounded-md bg-secondary/20 opacity-80">
             {sourceAsset && renderAssetPreview(sourceAsset)}
           </div>
+        ) : isSourceRichText && sourceDoc && !previewOnly ? (
+          <RichTextEditor
+            value={sourceDoc}
+            onChange={() => {}}
+            placeholder=""
+            disabled
+            withFormatting
+            showFormattingToolbar={false}
+            className={`${richEditorClass} text-muted-foreground`}
+            fieldGroups={fieldGroups}
+            allFields={allFields}
+            collections={collections}
+            layer={layer}
+            allowedFieldTypes={SIMPLE_TEXT_FIELD_TYPES}
+          />
         ) : (
           <Textarea
             value={sourceDisplayValue}
@@ -321,6 +418,21 @@ export default function SidebarTranslationRow({
               placeholder={sourceDisplayValue || 'No translation yet'}
               className={`${textareaClass} text-muted-foreground`}
               rows={3}
+            />
+          ) : isTranslationRichText ? (
+            <RichTextEditor
+              value={translationDoc}
+              onChange={handleRichChange}
+              onBlur={handleRichBlur}
+              placeholder={sourceDisplayValue || 'Enter translation...'}
+              withFormatting
+              showFormattingToolbar={false}
+              className={richEditorClass}
+              fieldGroups={fieldGroups}
+              allFields={allFields}
+              collections={collections}
+              layer={layer}
+              allowedFieldTypes={SIMPLE_TEXT_FIELD_TYPES}
             />
           ) : (
             <Textarea

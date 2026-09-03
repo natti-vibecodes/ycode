@@ -227,6 +227,20 @@ export async function publishCollectionWithItems(
         result.published.deletedItemSlugs = cleanup.deletedSlugs;
         await cleanupDeletedPublishedFields(collectionId);
       }
+
+      // Step 5: Remove orphaned published items whose draft twin no longer
+      // exists (hard-deleted). Runs unconditionally — the soft-delete probe
+      // above only detects drafts that still exist with a deleted_at, so a
+      // hard-deleted draft would otherwise leave its published twin live
+      // forever. Uses prefetched item lists to avoid extra round-trips.
+      const orphanCleanup = await cleanupOrphanedPublishedItems(collectionId, prefetched);
+      if (orphanCleanup.deletedCount > 0) {
+        result.published.deletedItemsCount = (result.published.deletedItemsCount ?? 0) + orphanCleanup.deletedCount;
+        result.published.deletedItemSlugs = [
+          ...(result.published.deletedItemSlugs ?? []),
+          ...orphanCleanup.deletedSlugs,
+        ];
+      }
     });
 
     result.success = true;
@@ -953,6 +967,107 @@ async function cleanupDeletedPublishedItems(
   }
 
   return { deletedCount: deletedItemIds.length, deletedSlugs };
+}
+
+/**
+ * Remove orphaned published items: published rows whose draft counterpart no
+ * longer exists at all. The soft-delete cleanup only removes published twins
+ * when a soft-deleted draft still exists, so a hard-deleted draft would leave
+ * its published row live indefinitely. Deleting the published row cascades to
+ * its values.
+ *
+ * @param prefetched - Optional prefetched item lists to skip DB reads
+ * @returns Number of deleted published items and their former slug values
+ */
+async function cleanupOrphanedPublishedItems(
+  collectionId: string,
+  prefetched?: CollectionPrefetch,
+): Promise<{ deletedCount: number; deletedSlugs: string[] }> {
+  const client = await getSupabaseAdmin();
+
+  if (!client) {
+    throw new Error('Supabase client not configured');
+  }
+
+  // Paginated id-only fetch (published rows carry no is_publishable filter so
+  // non-publishable orphans are caught too).
+  const fetchItemIds = async (isPublished: boolean): Promise<string[]> => {
+    const PAGE_SIZE = 1000;
+    const ids: string[] = [];
+    let offset = 0;
+    while (true) {
+      const { data, error } = await client
+        .from('collection_items')
+        .select('id')
+        .eq('collection_id', collectionId)
+        .eq('is_published', isPublished)
+        .is('deleted_at', null)
+        .range(offset, offset + PAGE_SIZE - 1);
+      if (error) {
+        throw new Error(`Failed to read items for orphan cleanup: ${error.message}`);
+      }
+      if (!data || data.length === 0) break;
+      ids.push(...data.map(row => row.id as string));
+      if (data.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+    }
+    return ids;
+  };
+
+  // Prefetched draft items already exclude soft-deleted rows, so any published
+  // id missing from this set is orphaned (draft hard- or soft-deleted).
+  const [draftIds, publishedIds] = prefetched
+    ? [prefetched.draftItems.map(i => i.id), prefetched.publishedItems.map(i => i.id)]
+    : await Promise.all([fetchItemIds(false), fetchItemIds(true)]);
+
+  const draftIdSet = new Set(draftIds);
+  const orphanIds = publishedIds.filter(id => !draftIdSet.has(id));
+
+  if (orphanIds.length === 0) {
+    return { deletedCount: 0, deletedSlugs: [] };
+  }
+
+  // Snapshot published slug values before deletion (for cache invalidation)
+  let deletedSlugs: string[] = [];
+  try {
+    const { data: slugField } = await client
+      .from('collection_fields')
+      .select('id')
+      .eq('collection_id', collectionId)
+      .eq('key', 'slug')
+      .is('deleted_at', null)
+      .limit(1)
+      .single();
+
+    if (slugField) {
+      const allSlugValues: Array<{ value: unknown }> = [];
+      for (let i = 0; i < orphanIds.length; i += SUPABASE_IN_FILTER_CHUNK_SIZE) {
+        const batch = orphanIds.slice(i, i + SUPABASE_IN_FILTER_CHUNK_SIZE);
+        const { data } = await client
+          .from('collection_item_values')
+          .select('value')
+          .eq('field_id', slugField.id)
+          .eq('is_published', true)
+          .in('item_id', batch);
+        if (data) allSlugValues.push(...data);
+      }
+      deletedSlugs = allSlugValues.map(sv => sv.value as string).filter(Boolean);
+    }
+  } catch {
+    // Non-fatal: proceed with deletion even if slug snapshot fails
+  }
+
+  // Batch hard delete orphaned published rows (CASCADE deletes their values)
+  for (let i = 0; i < orphanIds.length; i += SUPABASE_IN_FILTER_CHUNK_SIZE) {
+    const batch = orphanIds.slice(i, i + SUPABASE_IN_FILTER_CHUNK_SIZE);
+    await client
+      .from('collection_items')
+      .delete()
+      .in('id', batch)
+      .eq('is_published', true);
+  }
+
+  return { deletedCount: orphanIds.length, deletedSlugs };
 }
 
 /**

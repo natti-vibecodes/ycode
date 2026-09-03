@@ -766,6 +766,72 @@ export async function getUnpublishedAssets(): Promise<Asset[]> {
 }
 
 /**
+ * Count unpublished assets from id/hash only — not file payloads or SVG content.
+ */
+export async function getUnpublishedAssetsCount(): Promise<number> {
+  const client = await getSupabaseAdmin();
+
+  if (!client) {
+    throw new Error('Supabase not configured');
+  }
+
+  const draftAssets: Array<{ id: string; content_hash: string | null }> = [];
+  let offset = 0;
+
+  while (true) {
+    const { data, error } = await client
+      .from('assets')
+      .select('id, content_hash')
+      .eq('is_published', false)
+      .is('deleted_at', null)
+      .order('id', { ascending: true })
+      .range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
+
+    if (error) {
+      throw new Error(`Failed to fetch draft assets: ${error.message}`);
+    }
+
+    const batch = data || [];
+    draftAssets.push(...batch);
+
+    if (batch.length < SUPABASE_QUERY_LIMIT) break;
+    offset += SUPABASE_QUERY_LIMIT;
+  }
+
+  if (draftAssets.length === 0) {
+    return 0;
+  }
+
+  const publishedHashById = new Map<string, string | null>();
+  const draftIds = draftAssets.map((asset) => asset.id);
+  const PUBLISHED_ASSET_HASH_BATCH_SIZE = 200;
+
+  for (let i = 0; i < draftIds.length; i += PUBLISHED_ASSET_HASH_BATCH_SIZE) {
+    const batchIds = draftIds.slice(i, i + PUBLISHED_ASSET_HASH_BATCH_SIZE);
+    const { data: publishedAssets, error: publishedError } = await client
+      .from('assets')
+      .select('id, content_hash')
+      .in('id', batchIds)
+      .eq('is_published', true);
+
+    if (publishedError) {
+      throw new Error(`Failed to fetch published assets: ${publishedError.message}`);
+    }
+
+    publishedAssets?.forEach((asset) => publishedHashById.set(asset.id, asset.content_hash));
+  }
+
+  let count = 0;
+  for (const draft of draftAssets) {
+    if (!publishedHashById.has(draft.id) || draft.content_hash !== publishedHashById.get(draft.id)) {
+      count++;
+    }
+  }
+
+  return count;
+}
+
+/**
  * Get soft-deleted draft assets that need their published versions and files removed
  */
 export async function getDeletedDraftAssets(): Promise<Asset[]> {

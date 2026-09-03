@@ -641,6 +641,7 @@ function mapClassToDesignValue(className: string, property: string): string | un
     gridColumnSpan: 'col-span-',
     gridRowSpan: 'row-span-',
     lineClamp: 'line-clamp-',
+    textShadow: 'text-shadow-',
     translateX: 'translate-x-',
     translateY: 'translate-y-',
     skewX: 'skew-x-',

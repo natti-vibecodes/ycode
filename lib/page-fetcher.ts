@@ -2,7 +2,7 @@ import { cache } from 'react';
 import { escapeHtml } from '@/lib/escape-html';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { getKnexClient } from '@/lib/knex-client';
-import { buildSlugPath, buildDynamicPageUrl, buildLocalizedSlugPath, buildLocalizedDynamicPageUrl, detectLocaleFromPath, matchPageWithTranslatedSlugs, matchDynamicPageWithTranslatedSlugs } from '@/lib/page-utils';
+import { buildSlugPath, buildDynamicPageUrl, buildLocalizedDynamicPageUrl, detectLocaleFromPath, matchPageWithTranslatedSlugs, matchDynamicPageWithTranslatedSlugs } from '@/lib/page-utils';
 import { getItemWithValues, getItemsWithValues, getItemsWithValuesByIds, getItemIdsByFieldValue, getItemsByCollectionId, getSlugsByItemIds } from '@/lib/repositories/collectionItemRepository';
 import { getValuesByItemIds } from '@/lib/repositories/collectionItemValueRepository';
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
@@ -29,7 +29,7 @@ export interface PaginationContext {
   defaultPage?: number;
 }
 
-import { resolveFieldLinkValue, resolveRefCollectionItemId, generateLinkHref, isLinkAtCollectionBoundary, isLinkToCurrentPage, parseCollectionLinkValue, extractCrossCollectionItemIds } from '@/lib/link-utils';
+import { resolveRefCollectionItemId, generateLinkHref, isLinkAtCollectionBoundary, isLinkToCurrentPage, parseCollectionLinkValue, extractCrossCollectionItemIds } from '@/lib/link-utils';
 import type { LinkResolutionContext } from '@/lib/link-utils';
 import { getLinkSettingsFromMark } from '@/lib/tiptap-extensions/rich-text-link';
 import { SWIPER_CLASS_MAP, SWIPER_DATA_ATTR_MAP } from '@/lib/slider-constants';
@@ -5188,80 +5188,12 @@ export function layerToHtml(
     if (template) attrs.push(`data-pagination-template="${escapeHtml(template)}"`);
   }
 
-  // For buttons/divs rendered as <a>, resolve link href and add attributes directly
-  if ((isButtonWithLink || isDivWithLink) && buttonLinkSettings) {
-    let btnLinkHref = '';
-
-    switch (buttonLinkSettings.type) {
-      case 'url':
-        btnLinkHref = buttonLinkSettings.url?.data?.content || '';
-        break;
-      case 'email':
-        btnLinkHref = buttonLinkSettings.email?.data?.content ? `mailto:${buttonLinkSettings.email.data.content}` : '';
-        break;
-      case 'phone':
-        btnLinkHref = buttonLinkSettings.phone?.data?.content ? `tel:${buttonLinkSettings.phone.data.content}` : '';
-        break;
-      case 'page':
-        if (buttonLinkSettings.page?.id && pages && folders) {
-          const linkedPage = pages.find(p => p.id === buttonLinkSettings.page?.id);
-          if (linkedPage) {
-            btnLinkHref = buildLocalizedSlugPath(linkedPage, folders, 'page', locale, translations);
-          }
-        }
-        break;
-      case 'field': {
-        const fieldId = buttonLinkSettings.field?.data?.field_id;
-        const collLayerId = buttonLinkSettings.field?.data?.collection_layer_id;
-        let rawValue: string | undefined;
-        if (collLayerId && effectiveLayerDataMap?.[collLayerId]) {
-          rawValue = fieldId ? effectiveLayerDataMap[collLayerId][fieldId] : undefined;
-        } else {
-          rawValue = fieldId ? effectiveCollectionItemData?.[fieldId] : undefined;
-        }
-        if (fieldId && rawValue) {
-          const fieldType = buttonLinkSettings.field?.data?.field_type;
-          btnLinkHref = resolveFieldLinkValue({
-            fieldId,
-            rawValue,
-            fieldType,
-            context: {
-              pages: pages || [],
-              folders: folders || [],
-              collectionItemSlugs,
-              locale,
-              translations,
-              isPreview: false,
-              getAsset: makeAssetMapResolver(assetMap),
-            },
-            assetMap,
-          });
-        }
-        break;
-      }
-    }
-
-    if (buttonLinkSettings.anchor_layer_id) {
-      const anchorValue = anchorMap?.[buttonLinkSettings.anchor_layer_id] || buttonLinkSettings.anchor_layer_id;
-      btnLinkHref = btnLinkHref ? `${btnLinkHref}#${anchorValue}` : `#${anchorValue}`;
-    }
-
-    if (btnLinkHref) {
-      attrs.push(`href="${escapeHtml(btnLinkHref)}"`);
-      if (buttonLinkSettings.target) {
-        attrs.push(`target="${escapeHtml(buttonLinkSettings.target)}"`);
-      }
-      const btnLinkRel = buttonLinkSettings.rel || (buttonLinkSettings.target === '_blank' ? 'noopener noreferrer' : '');
-      if (btnLinkRel) {
-        attrs.push(`rel="${escapeHtml(btnLinkRel)}"`);
-      }
-      if (buttonLinkSettings.download) {
-        attrs.push('download');
-      }
-    }
-    if (isButtonWithLink) {
-      attrs.push('role="button"');
-    }
+  // Buttons rendered as <a> get a button role. The href and other link
+  // attributes are already emitted by the shared `generateLinkHref` path above
+  // (buttons/divs with links force `tag = 'a'`), so no separate resolution here —
+  // this keeps `{slug}` and other CMS variables resolved consistently.
+  if (isButtonWithLink) {
+    attrs.push('role="button"');
   }
 
   // For slider layers, strip inactive pagination/navigation children from the tree
@@ -5425,78 +5357,44 @@ export function layerToHtml(
     elementHtml = `<${tag}${attrsStr}>${escapeHtml(textContent)}${childrenHtml}</${tag}>`;
   }
 
-  // Wrap with link if layer has link settings (but is not already an <a> tag)
+  // Wrap with link if layer has link settings (but is not already an <a> tag).
+  // Reuse `generateLinkHref` so all link types — including dynamic-page
+  // collection_item_id keywords and `{slug}` substitution — resolve identically
+  // to layer `<a>` tags, self-closing wraps and React rendering.
   const linkSettings = layer.variables?.link;
   if (tag !== 'a' && linkSettings && linkSettings.type) {
-    let linkHref = '';
+    const linkHref = generateLinkHref(linkSettings, {
+      pages,
+      folders,
+      collectionItemSlugs,
+      collectionItemId: effectiveCollectionItemId,
+      pageCollectionItemId: pageLinkContext?.pageCollectionItemId,
+      collectionItemData: effectiveCollectionItemData,
+      pageCollectionItemData,
+      isPreview: pageLinkContext?.isPreview,
+      locale,
+      translations,
+      getAsset: makeAssetMapResolver(assetMap),
+      anchorMap,
+      layerDataMap: effectiveLayerDataMap,
+      pageCollectionSortedItemIds: pageLinkContext?.pageCollectionSortedItemIds,
+    });
 
-    switch (linkSettings.type) {
-      case 'url':
-        linkHref = linkSettings.url?.data?.content || '';
-        break;
-      case 'email':
-        linkHref = linkSettings.email?.data?.content ? `mailto:${linkSettings.email.data.content}` : '';
-        break;
-      case 'phone':
-        linkHref = linkSettings.phone?.data?.content ? `tel:${linkSettings.phone.data.content}` : '';
-        break;
-      case 'page':
-        if (linkSettings.page?.id && pages && folders) {
-          const linkedPage = pages.find(p => p.id === linkSettings.page?.id);
-          if (linkedPage) {
-            // Use localized URL if locale is active
-            linkHref = buildLocalizedSlugPath(linkedPage, folders, 'page', locale, translations);
-          }
-        }
-        break;
-      case 'field': {
-        const wrapFieldId = linkSettings.field?.data?.field_id;
-        const wrapCollectionLayerId = linkSettings.field?.data?.collection_layer_id;
-        // Use layer-specific data if collection_layer_id is specified
-        let rawValue: string | undefined;
-        if (wrapCollectionLayerId && effectiveLayerDataMap?.[wrapCollectionLayerId]) {
-          rawValue = wrapFieldId ? effectiveLayerDataMap[wrapCollectionLayerId][wrapFieldId] : undefined;
-        } else {
-          rawValue = wrapFieldId ? effectiveCollectionItemData?.[wrapFieldId] : undefined;
-        }
-        if (wrapFieldId && rawValue) {
-          const fieldType = linkSettings.field?.data?.field_type;
-          linkHref = resolveFieldLinkValue({
-            fieldId: wrapFieldId,
-            rawValue,
-            fieldType,
-            context: {
-              pages: pages || [],
-              folders: folders || [],
-              collectionItemSlugs,
-              locale,
-              translations,
-              isPreview: false,
-              getAsset: makeAssetMapResolver(assetMap),
-            },
-            assetMap,
-          });
-        }
-        break;
-      }
-    }
+    const atBoundary = !linkHref && isLinkAtCollectionBoundary(linkSettings, {
+      pageCollectionItemId: pageLinkContext?.pageCollectionItemId,
+      pageCollectionSortedItemIds: pageLinkContext?.pageCollectionSortedItemIds,
+    });
 
-    // Append anchor if present - resolve layer ID to actual anchor value
-    if (linkSettings.anchor_layer_id) {
-      const anchorValue = anchorMap?.[linkSettings.anchor_layer_id] || linkSettings.anchor_layer_id;
+    // Wrap content in <a> tag if we have a valid href (or a disabled boundary link)
+    if (linkHref || atBoundary) {
+      const linkAttrs: string[] = [];
       if (linkHref) {
-        linkHref = `${linkHref}#${anchorValue}`;
+        linkAttrs.push(`href="${escapeHtml(linkHref)}"`);
+        if (isCurrentPageLink) {
+          linkAttrs.push('aria-current="page"');
+        }
       } else {
-        linkHref = `#${anchorValue}`;
-      }
-    }
-
-    // Wrap content in <a> tag if we have a valid href
-    if (linkHref) {
-      const linkAttrs: string[] = [`href="${escapeHtml(linkHref)}"`];
-
-      if (isCurrentPageLink) {
-        linkAttrs.push('aria-current="page"');
+        linkAttrs.push('aria-disabled="true"', 'data-link-disabled="true"');
       }
 
       if (linkSettings.target) {

@@ -1,11 +1,15 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+
+import Icon from '@/components/ui/icon';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Icon } from '@/components/ui/icon';
+
+import { FilterCombobox } from './filter-combobox';
+
 import { useDebounce } from '@/hooks/use-debounce';
 import { useCollectionsStore } from '@/stores/useCollectionsStore';
+import { cn } from '@/lib/utils';
 
 interface CollectionItemSelectorProps {
   collectionId: string;
@@ -19,9 +23,10 @@ const SEARCH_DEBOUNCE_MS = 300;
 /**
  * Top-bar picker for the active collection item on dynamic pages.
  *
- * Items are sourced from the preloaded store cache; typing triggers a
- * debounced server search that merges results into the cache so the
- * canvas can resolve items beyond the initial preload window.
+ * The trigger is the filter field (same UX as PageSelector). Items come from
+ * the preloaded store cache; typing triggers a debounced server search that
+ * merges results into the cache so the canvas can resolve items beyond the
+ * initial preload window.
  */
 export default function CollectionItemSelector({
   collectionId,
@@ -34,7 +39,7 @@ export default function CollectionItemSelector({
 
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounce(search, SEARCH_DEBOUNCE_MS);
-  const [isSearching, setIsSearching] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   const dropdownItems = useMemo(() => {
     const items = itemsByCollection[collectionId] || [];
@@ -56,85 +61,99 @@ export default function CollectionItemSelector({
 
   useEffect(() => {
     if (!trimmedSearch) {
-      setIsSearching(false);
+      setIsLoading(false);
       return;
     }
 
     let cancelled = false;
-    setIsSearching(true);
+    setIsLoading(true);
     searchAndMergeItems(collectionId, trimmedSearch, SEARCH_LIMIT)
       .finally(() => {
-        if (!cancelled) setIsSearching(false);
+        if (!cancelled) setIsLoading(false);
       });
 
     return () => { cancelled = true; };
   }, [collectionId, trimmedSearch, searchAndMergeItems]);
 
-  // Auto-select the first item when none is selected yet
   useEffect(() => {
     if (!value && dropdownItems.length > 0) {
       onValueChange(dropdownItems[0].id);
     }
   }, [value, dropdownItems, onValueChange]);
 
-  const filteredItems = useMemo(() => {
-    if (!search.trim()) return dropdownItems;
-    const needle = search.toLowerCase();
-    return dropdownItems.filter((item) => item.label.toLowerCase().includes(needle));
-  }, [dropdownItems, search]);
+  const selectedLabel = dropdownItems.find((item) => item.id === value)?.label || '';
 
-  const selectedLabel = dropdownItems.find((item) => item.id === value)?.label || 'Select item';
-  const hasNoItems = dropdownItems.length === 0 && !isSearching;
-
-  const handleOpenChange = (open: boolean) => {
-    if (!open) setSearch('');
-  };
+  const handleEnter = useCallback((query: string) => {
+    if (!query.trim()) return;
+    const needle = query.toLowerCase();
+    const first = dropdownItems.find((item) => item.label.toLowerCase().includes(needle));
+    if (first) onValueChange(first.id);
+  }, [dropdownItems, onValueChange]);
 
   return (
-    <Select
-      value={value || ''}
-      onValueChange={(next) => {
-        onValueChange(next);
-        setSearch('');
-      }}
-      onOpenChange={handleOpenChange}
-      disabled={hasNoItems}
+    <FilterCombobox
+      displayValue={selectedLabel}
+      placeholder="Select item"
+      searchPlaceholder="Search items..."
+      ariaLabel="Select collection item"
+      className="w-24"
+      align="start"
+      popoverClassName="min-w-72 max-w-96"
+      isLoading={isLoading}
+      leading={(
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="shrink-0">
+              <Icon name="database" className="size-3 opacity-50" />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>Collection item</TooltipContent>
+        </Tooltip>
+      )}
+      onSearchChange={setSearch}
+      onEnter={handleEnter}
     >
-      <SelectTrigger className="w-24 justify-between" size="sm">
-        <div className="flex items-center gap-1.5 min-w-0 flex-1">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="shrink-0">
-                <Icon name="database" className="size-3 opacity-50" />
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>Collection item</TooltipContent>
-          </Tooltip>
-          <span className="truncate">{selectedLabel}</span>
-        </div>
-      </SelectTrigger>
+      {({ search: query, hasQuery, close }) => {
+        const needle = query.trim().toLowerCase();
+        const visibleItems = needle
+          ? dropdownItems.filter((item) => item.label.toLowerCase().includes(needle))
+          : dropdownItems;
 
-      <SelectContent
-        searchable
-        searchValue={search}
-        onSearchChange={setSearch}
-        searchPlaceholder="Search items..."
-        searchLoading={isSearching}
-        align="start"
-        className="min-w-72 max-w-96"
-      >
-        {filteredItems.length === 0 ? (
-          <div className="px-2 py-4 text-center text-xs text-muted-foreground">
-            {search ? (isSearching ? 'Searching...' : 'No items found') : 'No items available'}
-          </div>
-        ) : (
-          filteredItems.map((item) => (
-            <SelectItem key={item.id} value={item.id}>
-              <span className="truncate">{item.label}</span>
-            </SelectItem>
-          ))
-        )}
-      </SelectContent>
-    </Select>
+        if (visibleItems.length === 0) {
+          return (
+            <div className="px-2 py-4 text-center text-xs text-muted-foreground">
+              {hasQuery ? (isLoading ? 'Searching...' : 'No items found') : 'No items available'}
+            </div>
+          );
+        }
+
+        return visibleItems.map((item) => {
+          const isSelected = item.id === value;
+          return (
+            <div
+              key={item.id}
+              role="option"
+              aria-selected={isSelected}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                onValueChange(item.id);
+                close();
+              }}
+              className={cn(
+                'hover:bg-accent hover:text-accent-foreground text-muted-foreground relative flex w-full cursor-pointer items-center gap-2 rounded-sm py-1.5 pr-8 pl-2 text-xs outline-hidden select-none',
+                isSelected && 'bg-secondary/50'
+              )}
+            >
+              <span className="min-w-0 truncate">{item.label}</span>
+              {isSelected && (
+                <span className="absolute right-2 flex size-3 items-center justify-center">
+                  <Icon name="check" className="size-3 opacity-50" />
+                </span>
+              )}
+            </div>
+          );
+        });
+      }}
+    </FilterCombobox>
   );
 }

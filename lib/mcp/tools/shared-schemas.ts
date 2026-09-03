@@ -86,6 +86,7 @@ export const designSchema = z.object({
     verticalAlign: z.string().optional(),
     color: z.string().optional(),
     placeholderColor: z.string().optional(),
+    textShadow: z.string().optional().describe('0px_1px_2px_rgba(0,0,0,0.4) or sm/md/lg'),
   }).nullable().optional(),
   spacing: z.object({
     isActive: z.boolean().optional(),
@@ -159,6 +160,7 @@ export const designSchema = z.object({
     filter: z.string().optional().describe('CSS filter, e.g. "grayscale(1)" or "brightness(0.5)"'),
     backdropFilter: z.string().optional().describe('CSS backdrop-filter, e.g. "saturate(180%)"'),
     mixBlendMode: z.string().optional().describe('CSS mix-blend-mode, e.g. "multiply", "screen", "overlay"'),
+    cursor: z.string().optional().describe('pointer | default | text | grab | wait | not-allowed | auto'),
   }).nullable().optional(),
   positioning: z.object({
     isActive: z.boolean().optional(),

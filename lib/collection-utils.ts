@@ -399,6 +399,10 @@ export function remapLayerIdsForCollectionItem(layer: Layer, suffix: string): La
     const remapped: Layer = {
       ...l,
       id: `${l.id}${suffix}`,
+      // Preserve the pre-suffix id so translation injection (which runs after
+      // collection expansion and keys off the original template layer id) can
+      // still resolve static text translations for layers rendered per item.
+      _originalLayerId: (l as Layer)._originalLayerId || l.id,
     };
 
     if (l.interactions?.length) {
