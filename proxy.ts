@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { isWorkspaceMember } from '@/lib/roles';
 import { applySecurityHeaders } from '@/lib/security-headers-server';
+import { resolveProxyAuth } from '@/lib/proxy-auth-config';
 
 /**
  * Public API routes that skip authentication.
@@ -21,41 +22,9 @@ const PUBLIC_API_PREFIXES = [
 const PUBLIC_COLLECTION_ITEM_SUFFIXES = ['/items/filter', '/items/load-more'];
 
 const PUBLIC_API_EXACT = [
-  '/ycode/api/revalidate', // Cache revalidation — has own secret token auth
   '/ycode/api/oauth/register', // RFC 7591 Dynamic Client Registration — anonymous
   '/ycode/api/oauth/token',    // OAuth token exchange — auth is via PKCE/refresh
 ];
-
-/**
- * Derive the Supabase project URL and anon key from environment variables.
- * Returns null if env vars are not set (pre-setup or local dev without .env.local).
- *
- * Uses SUPABASE_URL when set (self-hosted instances), otherwise derives from
- * the project ref in the connection string (hosted Supabase).
- */
-function getSupabaseEnvConfig(): { url: string; anonKey: string } | null {
-  const anonKey = process.env.SUPABASE_PUBLISHABLE_KEY
-    || process.env.SUPABASE_ANON_KEY;
-  const connectionUrl = process.env.SUPABASE_CONNECTION_URL;
-
-  if (!anonKey || !connectionUrl) return null;
-
-  if (process.env.SUPABASE_URL) {
-    return {
-      url: process.env.SUPABASE_URL.replace(/\/+$/, ''),
-      anonKey,
-    };
-  }
-
-  // Hosted Supabase: extract project ID from connection URL
-  const match = connectionUrl.match(/\/\/postgres\.([a-z0-9]+):/);
-  if (!match) return null;
-
-  return {
-    url: `https://${match[1]}.supabase.co`,
-    anonKey,
-  };
-}
 
 function isPublicApiRoute(pathname: string, method: string): boolean {
   // POST to form-submissions is public (website visitors submitting forms)
@@ -85,14 +54,25 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
     return null;
   }
 
-  const config = getSupabaseEnvConfig();
+  const decision = resolveProxyAuth(process.env, process.env.NODE_ENV);
 
-  // If env vars aren't set (pre-setup or local dev without .env.local), let through
-  if (!config) return null;
+  // Genuine pre-setup only (nothing configured at all, outside production): the setup wizard
+  // has to be reachable before credentials exist. Anything else that cannot authenticate is a
+  // refusal — this branch used to also swallow a MISCONFIGURATION, so one typo'd env var
+  // silently disabled auth on every builder API route with no error anywhere.
+  if (decision.mode === 'allow-pre-setup') return null;
+
+  if (decision.mode === 'unavailable') {
+    console.error('[proxy] Refusing builder API request — cannot authenticate:', decision.reason);
+    return NextResponse.json(
+      { error: 'Authentication is unavailable' },
+      { status: 503 }
+    );
+  }
 
   let response = NextResponse.next({ request });
 
-  const supabase = createServerClient(config.url, config.anonKey, {
+  const supabase = createServerClient(decision.url, decision.anonKey, {
     cookies: {
       getAll() {
         return request.cookies.getAll();
@@ -168,7 +148,8 @@ export async function proxy(request: NextRequest) {
         }
         return authResponse;
       }
-      // Authenticated — pass through
+      // Authenticated pass-through, or a non-401 refusal (403 not-a-member, 503 auth
+      // unavailable) — either way this response is the one to return.
       authResponse.headers.set('x-pathname', pathname);
       return authResponse;
     }

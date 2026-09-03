@@ -71,13 +71,14 @@ export default function LoadMoreCollection({
           body: JSON.stringify({
             offset: loadedCount,
             limit: itemsPerPage,
-            published: isPublished !== false,
+            // `published` / `isPreview` are deliberately NOT sent: the route is public and
+            // hard-codes published state server-side. Sending them would imply the client
+            // still has a say.
             itemIds,
             layerTemplate,
             collectionLayerId,
             sortBy,
             sortOrder,
-            isPreview,
             pageCollectionItemId,
             pageCollectionSortedItemIds,
             collectionLayer,
@@ -92,10 +93,11 @@ export default function LoadMoreCollection({
       }
 
       const result = await response.json();
-      const { items, html, hasMore: nextHasMore } = result.data;
-      const newItemIds: string[] = Array.isArray(items)
-        ? (items as CollectionItem[]).map(item => item.id)
-        : [];
+      const { itemIds: newIds, count, html, hasMore: nextHasMore } = result.data;
+      // The route returns ids + a count, not the raw rows — it is a public endpoint and
+      // used to hand back every field value of every row it rendered.
+      const newItemIds: string[] = Array.isArray(newIds) ? (newIds as string[]) : [];
+      const appendedCount: number = typeof count === 'number' ? count : newItemIds.length;
 
       const parent = markerRef.current?.parentElement;
       if (html && parent) {
@@ -129,7 +131,7 @@ export default function LoadMoreCollection({
         }
       }
 
-      setLoadedCount(prev => prev + items.length);
+      setLoadedCount(prev => prev + appendedCount);
       setHasMore(nextHasMore);
     } catch (error) {
       console.error('Load more failed:', error);

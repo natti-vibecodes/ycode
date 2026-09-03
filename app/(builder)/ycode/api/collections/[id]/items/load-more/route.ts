@@ -121,11 +121,9 @@ export async function POST(
       collectionLayer,
       sortBy,
       sortOrder = 'asc',
-      published = true,
       localeCode,
       collectionLayerClasses,
       collectionLayerTag,
-      isPreview = false,
       pageCollectionItemId,
       pageCollectionSortedItemIds,
       maxTotal,
@@ -138,6 +136,16 @@ export async function POST(
     if (!collectionLayerId) {
       return noCache({ error: 'collectionLayerId is required' }, 400);
     }
+
+    // This route is PUBLIC (proxy.ts exempts POST .../items/load-more so published pages can
+    // paginate), so nothing the client sends about publish state can be trusted. The route used
+    // to read `published` straight from the body, defaulting to true but honouring a posted
+    // `false` — which flowed into every repository call below AND skipped the `is_publishable`
+    // gate, so an anonymous POST with `published: false` dumped the entire draft CMS.
+    // Publish state is a server fact on a public endpoint: hard-coded, never parsed.
+    // Same for `isPreview`, which only ever loosened rendering for the builder.
+    const published = true;
+    const isPreview = false;
 
     const pageOffset = Math.max(0, isNaN(offset) ? 0 : offset);
     const pageLimit = isNaN(limit) || limit < 1 ? 10 : Math.min(limit, 100);
@@ -259,10 +267,18 @@ export async function POST(
       collectionLayer as Omit<Layer, 'children'> | undefined,
     );
 
+    // Return only what the public renderer needs: the rendered HTML plus pagination
+    // metadata. The raw `items` array used to go out too — every field value of every
+    // returned row, including fields the layer template never renders — which made this
+    // public endpoint a full CMS read API on top of a paginator. The client (see
+    // components/LoadMoreCollection.tsx) only ever used `items` for `.map(i => i.id)` and
+    // `.length`, so `itemIds` and `count` replace it with no loss. This also matches the
+    // sibling filter route's response shape, which already returned `itemIds`/`count`.
     return noCache({
       data: {
-        items,
         html,
+        itemIds: items.map(item => item.id),
+        count: items.length,
         total,
         offset: pageOffset,
         limit: pageLimit,
