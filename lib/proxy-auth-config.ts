@@ -26,7 +26,12 @@ export type ProxyAuthDecision =
   /** Configured but unusable, or unconfigured in production. Refuse. */
   | { mode: 'unavailable'; reason: string };
 
+/**
+ * The index signature is what makes `process.env` (NodeJS.ProcessEnv) assignable here —
+ * without it an all-optional interface "has no properties in common" with ProcessEnv.
+ */
 export interface SupabaseEnvLike {
+  [key: string]: string | undefined;
   SUPABASE_PUBLISHABLE_KEY?: string;
   SUPABASE_ANON_KEY?: string;
   SUPABASE_CONNECTION_URL?: string;
