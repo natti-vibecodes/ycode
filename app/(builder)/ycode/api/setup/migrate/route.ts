@@ -1,15 +1,23 @@
 import { runMigrations } from '@/lib/services/migrationService';
 import { runSeeds } from '@/lib/services/seedService';
 import { noCache } from '@/lib/api-response';
+import { requireSetupOpen } from '@/lib/setup-guard';
 
 /**
  * POST /ycode/api/setup/migrate
  *
  * Automatically runs pending Supabase migrations using Knex, if any
- * Then runs seed data
+ * Then runs seed data.
+ *
+ * Only callable while the workspace is unclaimed — see lib/setup-guard.ts. This route ran
+ * migrations and seeds for anyone who could reach it, and returned the raw migration error
+ * (schema names, driver text) on failure.
  */
 export async function POST() {
   try {
+    const locked = await requireSetupOpen();
+    if (locked) return locked;
+
     const result = await runMigrations();
 
     if (!result.success) {
@@ -42,9 +50,6 @@ export async function POST() {
   } catch (error) {
     console.error('[setup/migrate] Migration error:', error);
 
-    return noCache(
-      { error: error instanceof Error ? error.message : 'Migration failed' },
-      500
-    );
+    return noCache({ error: 'Migration failed' }, 500);
   }
 }
