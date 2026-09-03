@@ -43,6 +43,9 @@ export interface FormLayerTree {
 export type FormEmailResolution =
   | { outcome: 'send'; to: string; subject?: string; matchedIn: string[] }
   | { outcome: 'form-not-found' }
+  /** The form exists but stores no `email_notification` key at all — never configured. */
+  | { outcome: 'unconfigured'; matchedIn: string[] }
+  /** The form stores an `email_notification` whose `enabled` is not true — deliberately off. */
   | { outcome: 'disabled'; matchedIn: string[] }
   | { outcome: 'no-recipient'; matchedIn: string[] }
   | { outcome: 'ambiguous'; recipients: string[]; matchedIn: string[] };
@@ -103,9 +106,17 @@ export function resolveFormEmailFromTrees(trees: FormLayerTree[], formId: string
 
   const matchedIn = [...new Set(matches.map(m => m.label))];
 
-  const enabled = matches
+  const configured = matches
     .map(m => m.layer.settings?.form?.email_notification)
-    .filter((n): n is StoredFormEmailNotification => n?.enabled === true);
+    .filter((n): n is StoredFormEmailNotification => !!n && typeof n === 'object');
+
+  // "Never configured" and "deliberately switched off" look the same from a boolean but must be
+  // treated differently by the published/draft fallback below.
+  if (configured.length === 0) {
+    return { outcome: 'unconfigured', matchedIn };
+  }
+
+  const enabled = configured.filter(n => n.enabled === true);
 
   if (enabled.length === 0) {
     return { outcome: 'disabled', matchedIn };
@@ -144,9 +155,17 @@ export interface ResolvedFormEmail {
 }
 
 /**
- * Published first, draft only as a fallback when the form is not in the published tree at all.
- * A published form whose notification is switched off must NOT fall through to a draft that has
- * it switched on — that would resurrect a setting an editor deliberately turned off.
+ * Published wins, because that is what the visitor's page was rendered from — so an unpublished
+ * edit cannot silently redirect live leads to a different address.
+ *
+ * Draft is consulted only when the published tree has nothing to say: the form is absent, or it
+ * is present but has never had an `email_notification` written to it. A published notification
+ * with `enabled: false` is a deliberate "off" and deliberately does NOT fall through, or an
+ * editor switching notifications off would find a stale draft turning them back on.
+ *
+ * The unconfigured case is not hypothetical: as of 2026-09-03 the published `Contact + final CTA`
+ * component carries no notification while its draft holds the real hello@scalability.us config,
+ * so treating "never configured" as "off" would mean the contact form never notifies anyone.
  */
 export async function resolveStoredFormEmailNotification(
   formId: string,
@@ -154,17 +173,24 @@ export async function resolveStoredFormEmailNotification(
 ): Promise<ResolvedFormEmail> {
   const published = await sources.published();
   const fromPublished = resolveFormEmailFromTrees(published, formId);
-  if (fromPublished.outcome !== 'form-not-found') {
+
+  const publishedIsSilent =
+    fromPublished.outcome === 'form-not-found' || fromPublished.outcome === 'unconfigured';
+
+  if (!publishedIsSilent) {
     return { resolution: fromPublished, source: 'published' };
   }
 
   const draft = await sources.draft();
   const fromDraft = resolveFormEmailFromTrees(draft, formId);
-  if (fromDraft.outcome !== 'form-not-found') {
+  if (fromDraft.outcome !== 'form-not-found' && fromDraft.outcome !== 'unconfigured') {
     return { resolution: fromDraft, source: 'draft' };
   }
 
-  return { resolution: { outcome: 'form-not-found' }, source: 'none' };
+  // Neither store had anything actionable — report the more specific of the two.
+  return fromPublished.outcome === 'unconfigured'
+    ? { resolution: fromPublished, source: 'published' }
+    : { resolution: fromDraft, source: fromDraft.outcome === 'form-not-found' ? 'none' : 'draft' };
 }
 
 export interface FormNotificationEmailData {

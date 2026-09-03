@@ -14,6 +14,7 @@ import {
   submissionFormId,
   resolveFormEmailFromTrees,
   notifyFormSubmission,
+  resolveStoredFormEmailNotification,
   UNNAMED_FORM_ID,
   type FormLayerTree,
   type ResolvedFormEmail,
@@ -110,6 +111,11 @@ describe('form email config — resolution rules', () => {
     assert.equal(resolution.outcome === 'send' && resolution.matchedIn.length, 2);
   });
 
+  test('a form with no email_notification key at all reads as unconfigured, not disabled', () => {
+    const form = contactFormLayer({ form: {} } as never);
+    assert.equal(resolveFormEmailFromTrees([pageTree(form)], 'contact-form').outcome, 'unconfigured');
+  });
+
   test('duplicate copies DISAGREEING on the recipient refuse to send', () => {
     const other = contactFormLayer({
       form: { email_notification: { enabled: true, to: 'someone-else@scalability.us' } },
@@ -119,6 +125,62 @@ describe('form email config — resolution rules', () => {
       'contact-form'
     );
     assert.equal(resolution.outcome, 'ambiguous');
+  });
+});
+
+describe('form email config — published vs draft fallback', () => {
+  const enabledForm = () => pageTree(contactFormLayer(), 'draft:component[Contact + final CTA]');
+
+  test('a published notification wins over a draft one', async () => {
+    const publishedForm = contactFormLayer({
+      form: { email_notification: { enabled: true, to: 'published@scalability.us' } },
+    } as never);
+
+    const resolved = await resolveStoredFormEmailNotification('contact-form', {
+      published: async () => [pageTree(publishedForm)],
+      draft: async () => [enabledForm()],
+    });
+
+    assert.equal(resolved.source, 'published');
+    assert.equal(resolved.resolution.outcome === 'send' && resolved.resolution.to, 'published@scalability.us');
+  });
+
+  test('a published notification switched OFF does not fall through to an enabled draft', async () => {
+    const off = contactFormLayer({
+      form: { email_notification: { enabled: false, to: STORED_RECIPIENT } },
+    } as never);
+
+    const resolved = await resolveStoredFormEmailNotification('contact-form', {
+      published: async () => [pageTree(off)],
+      draft: async () => [enabledForm()],
+    });
+
+    assert.equal(resolved.resolution.outcome, 'disabled');
+    assert.equal(resolved.source, 'published');
+  });
+
+  test('THE LIVE SHAPE (2026-09-03): published form never configured, draft holds the real config', async () => {
+    // Published `Contact + final CTA` carries no email_notification; the draft has the real one.
+    // Treating "never configured" as "off" would mean the contact form notifies nobody.
+    const neverConfigured = contactFormLayer({ form: {} } as never);
+
+    const resolved = await resolveStoredFormEmailNotification('contact-form', {
+      published: async () => [pageTree(neverConfigured)],
+      draft: async () => [enabledForm()],
+    });
+
+    assert.equal(resolved.source, 'draft');
+    assert.equal(resolved.resolution.outcome, 'send');
+    assert.equal(resolved.resolution.outcome === 'send' && resolved.resolution.to, STORED_RECIPIENT);
+  });
+
+  test('nothing anywhere resolves to form-not-found', async () => {
+    const resolved = await resolveStoredFormEmailNotification('contact-form', {
+      published: async () => [],
+      draft: async () => [],
+    });
+    assert.equal(resolved.resolution.outcome, 'form-not-found');
+    assert.equal(resolved.source, 'none');
   });
 });
 
