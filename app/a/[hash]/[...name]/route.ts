@@ -19,6 +19,7 @@ import { getAssetProxyUrl, isAssetOfType, ASSET_CATEGORIES } from '@/lib/asset-u
 import { getAssetForProxy } from '@/lib/repositories/assetRepository';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { STORAGE_BUCKET } from '@/lib/asset-constants';
+import { resolveAssetResponseSecurity } from '@/lib/asset-mime-policy';
 
 // Cache headers set at infrastructure level via next.config.ts headers()
 // to prevent Next.js proxy from overriding them
@@ -93,6 +94,13 @@ export async function GET(
     const url = new URL(request.url);
     const isImage = isAssetOfType(asset.mime_type, ASSET_CATEGORIES.IMAGES);
 
+    // This route serves member-supplied bytes from the BUILDER'S OWN ORIGIN, so
+    // the Content-Type is re-derived from the stored value against the SERVE
+    // allowlist rather than echoed, and scriptable types are pinned shut. Rows
+    // written before files/register validated its input still hold whatever
+    // they were given, so the check has to happen here too — not only on write.
+    const security = resolveAssetResponseSecurity(asset.mime_type);
+
     // Forward Range requests for media (video/audio). Safari refuses to play
     // a video unless the server responds with 206 Partial Content, so we proxy
     // the client's Range header to Supabase Storage (which supports ranges).
@@ -139,11 +147,15 @@ export async function GET(
 
         const resized = await pipeline.toBuffer();
 
+        // These bytes are Sharp's output, not the stored file, so the type is
+        // known first-hand rather than derived. Only nosniff applies — this
+        // branch never sees an SVG (isResizableBitmap excludes it).
         return new Response(new Uint8Array(resized), {
           status: 200,
           headers: {
             'Content-Type': isAvif ? 'image/avif' : 'image/webp',
             'Content-Length': resized.length.toString(),
+            'X-Content-Type-Options': 'nosniff',
           },
         });
       } catch {
@@ -153,7 +165,8 @@ export async function GET(
         return new Response(new Uint8Array(buffer), {
           status: 200,
           headers: {
-            'Content-Type': asset.mime_type || 'application/octet-stream',
+            ...security.headers,
+            'Content-Type': security.contentType,
             'Content-Length': buffer.length.toString(),
           },
         });
@@ -164,7 +177,8 @@ export async function GET(
     // Safari can stream/seek the video. Advertise Accept-Ranges so clients know
     // range requests are supported even on the initial full response.
     const headers = new Headers({
-      'Content-Type': asset.mime_type || 'application/octet-stream',
+      ...security.headers,
+      'Content-Type': security.contentType,
       'Accept-Ranges': 'bytes',
     });
 

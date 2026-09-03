@@ -947,6 +947,11 @@ async function uploadViaPresignedUrl(
       mimeType: file.type,
       fileSize: file.size,
       source,
+      // Sent so register can apply the same category rule presign did. Register
+      // validates the mime type on its own regardless — this request is just as
+      // forgeable as the presign one, so the category is a convenience for
+      // honest callers, never the security boundary.
+      category,
       customName,
       assetFolderId,
     }),
