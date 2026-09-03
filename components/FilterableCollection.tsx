@@ -759,10 +759,11 @@ export default function FilterableCollection({
         offset,
         maxTotal,
         baseOffset,
-        published: isPublished,
+        // `published` / `isPreview` are deliberately NOT sent: the route is public and
+        // hard-codes published state server-side. Sending them would imply the client
+        // still has a say.
         collectionLayerClasses,
         collectionLayerTag,
-        isPreview,
         pageCollectionItemId,
         pageCollectionSortedItemIds,
         collectionLayer,

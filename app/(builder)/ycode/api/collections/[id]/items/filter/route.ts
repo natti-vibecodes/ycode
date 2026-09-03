@@ -629,8 +629,6 @@ export async function POST(
       localeCode,
       collectionLayerClasses,
       collectionLayerTag,
-      published: isPublished = true,
-      isPreview = false,
       pageCollectionItemId,
       pageCollectionSortedItemIds,
     } = body;
@@ -641,6 +639,16 @@ export async function POST(
     if (!collectionLayerId) {
       return noCache({ error: 'collectionLayerId is required' }, 400);
     }
+
+    // This route is PUBLIC (proxy.ts exempts POST .../items/filter so published pages can
+    // filter), so nothing the client sends about publish state can be trusted. The route used
+    // to read `published` straight from the body, defaulting to true but honouring a posted
+    // `false` — which flowed into getFilteredItemIds and every field/translation lookup AND
+    // skipped the `is_publishable` gate, so an anonymous POST with `published: false` filtered
+    // and rendered the entire draft CMS. Publish state is a server fact here: hard-coded,
+    // never parsed. Same for `isPreview`, which only ever loosened rendering for the builder.
+    const isPublished = true;
+    const isPreview = false;
 
     // Collection fields, page/folder maps, and translations are needed only for
     // rendering and don't depend on the timezone or which items match. Fetch them
