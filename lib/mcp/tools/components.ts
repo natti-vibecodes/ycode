@@ -22,7 +22,7 @@ import {
   generateId,
 } from '@/lib/mcp/utils';
 import type { RichTextBlock } from '@/lib/mcp/utils';
-import { mergeAttributeMap } from '@/lib/layer-utils';
+import { mergeAttributeMap, applyFormSettings } from '@/lib/layer-utils';
 import { buildComponentInstanceLayer, detachSpecificLayerFromComponent, isCircularComponentReference } from '@/lib/component-utils';
 import {
   cleanLayersForComponentCreation,
@@ -904,6 +904,20 @@ Pass variant_id to target a specific named variant; omit it to update the primar
             .describe("The element's own attributes — the field the renderer reads natively for images (`loading`, `sizes`, `width`, `height`) and media (`controls`, `autoplay`, `muted`, `loop`). MERGES, unlike custom_attributes: pass only what you are changing, and pass null as a value to DELETE a key. Merging is deliberate here because these attributes carry `src`/`width`/`height`, and a replace would silently wipe them."),
         }),
         z.object({
+          type: z.literal('update_form_settings'),
+          layer_id: z.string().describe('The form layer ID or ref_id'),
+          success_action: z.enum(['message', 'redirect']).optional()
+            .describe('"message" (default) shows the form\'s alert child; "redirect" sends the visitor to redirect_url.'),
+          redirect_url: z.string().optional()
+            .describe('For success_action "redirect": the URL to send the user to. Internal path "/thank-you" or an external URL.'),
+          email_notification: z.object({
+            enabled: z.boolean(),
+            to: z.string().describe('Email address that receives a notification on each submission'),
+            subject: z.string().optional().describe('Subject line of the notification email'),
+          }).optional()
+            .describe('When enabled, each submission emails this address. Requires SMTP set up in site settings.'),
+        }),
+        z.object({
           type: z.literal('delete_layer'),
           layer_id: z.string(),
         }),
@@ -1137,6 +1151,28 @@ Pass variant_id to target a specific named variant; omit it to update the primar
                 } as typeof l;
               });
               results.push({ op: i, status: 'ok', detail: `Updated settings on "${layer.customName || layer.name}"` });
+              break;
+            }
+
+            case 'update_form_settings': {
+              // SCA-1362 — the page-level `update_form_settings` tool resolves layers only via
+              // getPageLayers(page_id), so a form inside a COMPONENT master was unreachable: its
+              // email_notification/redirect could not be configured by an agent at all. Detaching
+              // the instance was the only route, and that trades away reuse on every page.
+              // Writes through the same applyFormSettings the page tool uses, so the two surfaces
+              // are identical by construction rather than by review.
+              const layerId = refMap.get(op.layer_id) || op.layer_id;
+              const layer = findLayerById(layers, layerId);
+              if (!layer) { results.push({ op: i, status: 'error', detail: `Layer "${op.layer_id}" not found` }); continue; }
+              layers = updateLayerById(layers, layerId, (l) => ({
+                ...l,
+                settings: applyFormSettings(l.settings, {
+                  success_action: op.success_action,
+                  redirect_url: op.redirect_url,
+                  email_notification: op.email_notification,
+                }),
+              }));
+              results.push({ op: i, status: 'ok', detail: `Updated form settings on "${layer.customName || layer.name}"` });
               break;
             }
 

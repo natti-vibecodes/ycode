@@ -15,7 +15,7 @@ import {
   applyBackgroundImageDesign,
 } from '@/lib/mcp/utils';
 import type { RichTextBlock } from '@/lib/mcp/utils';
-import { mergeAttributeMap } from '@/lib/layer-utils';
+import { mergeAttributeMap, applyFormSettings } from '@/lib/layer-utils';
 import { layerToExportHtml } from '@/lib/html-layer-converter';
 import { collectFontFamiliesFromDesign, ensureFontsInstalled, fontWarnings } from '@/lib/mcp/font-install';
 import { getCachedLayers as getPageLayers, saveCachedLayers } from '@/lib/mcp/page-layers';
@@ -702,18 +702,12 @@ redirect_url: used when success_action is "redirect". Accepts an internal path "
         return { content: [{ type: 'text' as const, text: `Error: Layer "${layer_id}" not found.` }], isError: true };
       }
 
-      const updated = updateLayerById(layers, layer_id, (l) => {
-        const settings = { ...l.settings };
-        const existingForm = (settings.form || {}) as Record<string, unknown>;
-        const nextForm: Record<string, unknown> = { ...existingForm };
-        if (success_action !== undefined) nextForm.success_action = success_action;
-        if (email_notification !== undefined) nextForm.email_notification = email_notification;
-        if (redirect_url !== undefined) {
-          nextForm.redirect_url = { type: 'dynamic_text', data: { content: redirect_url } };
-        }
-        settings.form = nextForm as typeof settings.form;
-        return { ...l, settings };
-      });
+      // Shared with update_component_layers' update_form_settings op so the page and component
+      // surfaces cannot drift (SCA-1362).
+      const updated = updateLayerById(layers, layer_id, (l) => ({
+        ...l,
+        settings: applyFormSettings(l.settings, { success_action, redirect_url, email_notification }),
+      }));
 
       await savePageLayers(page_id, updated);
       return { content: [{ type: 'text' as const, text: `Updated form settings for "${layer.customName || layer.name}"` }] };

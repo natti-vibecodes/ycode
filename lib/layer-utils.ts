@@ -2,7 +2,7 @@
  * Layer utilities for rendering and manipulation
  */
 
-import { Layer, FieldVariable, CollectionVariable, CollectionItemWithValues, CollectionField, Component, ComponentVariable, Breakpoint, LayerVariables, DesignColorVariable, BoundColorStop } from '@/types';
+import { Layer, FieldVariable, CollectionVariable, CollectionItemWithValues, CollectionField, Component, ComponentVariable, Breakpoint, LayerVariables, DesignColorVariable, BoundColorStop, LayerSettings, FormSettings } from '@/types';
 import { generateId } from '@/lib/utils';
 import { resolveInlineVariablesFromData } from '@/lib/inline-variables';
 import { DEFAULT_TEXT_STYLES } from '@/lib/text-format-utils';
@@ -4641,4 +4641,54 @@ export function mergeAttributeMap(
     out[key] = value;
   }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** The fields both form-settings surfaces accept. `redirect_url` is a plain string here and is
+ *  wrapped into the stored `dynamic_text` shape by `applyFormSettings`. */
+export interface FormSettingsPatch {
+  success_action?: 'message' | 'redirect';
+  redirect_url?: string;
+  email_notification?: { enabled: boolean; to: string; subject?: string };
+}
+
+/**
+ * Write form-submission settings onto a layer's `settings`, returning a new object.
+ *
+ * SCA-1362 — this exists so the two surfaces cannot drift. `update_form_settings` (pages) could
+ * only ever resolve PAGE-owned layers via getPageLayers(page_id), so a form living inside a
+ * COMPONENT master was unreachable: `settings.form.email_notification` could not be configured by
+ * an agent at all, and the only route was detaching the instance — trading away reuse on every
+ * page that uses it. The component surface (`update_component_layers`) now has an
+ * `update_form_settings` op, and both call THIS function rather than each keeping its own copy,
+ * so "identical behaviour" is guaranteed by construction instead of by review.
+ *
+ * Semantics worth pinning:
+ * - PATCH, not replace: an undefined field leaves the stored value alone, so setting an email
+ *   notification never silently drops a previously configured redirect (and vice versa).
+ * - `redirect_url` is wrapped as `{ type: 'dynamic_text', data: { content } }`, byte-for-byte what
+ *   the page tool has always written. NOTE (reported, deliberately NOT changed here): that shape
+ *   does not match the declared `LinkSettings` type, whose `type` must be a LinkType
+ *   ('url' | 'email' | 'phone' | 'asset' | 'page' | 'field'). The renderer feeds this value to
+ *   generateLinkHref (components/LayerRendererPublic.tsx ~1350), which returns null for an
+ *   unrecognised `type` — so an MCP-set redirect likely never fires on EITHER surface. That is a
+ *   pre-existing page-tool bug; this change was scoped to mirror it exactly rather than alter the
+ *   page surface's behaviour underneath its callers. Fix both together, with a redirect test.
+ * - Never mutates the input; component ops apply in sequence against one tree, so a mutating
+ *   write would let a later op change what an earlier one already wrote.
+ */
+export function applyFormSettings(
+  settings: LayerSettings | undefined | null,
+  patch: FormSettingsPatch,
+): LayerSettings {
+  const next: LayerSettings = { ...(settings ?? {}) };
+  const nextForm: FormSettings = { ...(next.form ?? {}) };
+  if (patch.success_action !== undefined) nextForm.success_action = patch.success_action;
+  if (patch.email_notification !== undefined) nextForm.email_notification = patch.email_notification;
+  if (patch.redirect_url !== undefined) {
+    // Double cast because the stored shape genuinely is not a LinkSettings — see the note above.
+    // The page tool got here via an untyped Record and a blanket cast, which hid the mismatch.
+    nextForm.redirect_url = { type: 'dynamic_text', data: { content: patch.redirect_url } } as unknown as FormSettings['redirect_url'];
+  }
+  next.form = nextForm;
+  return next;
 }
