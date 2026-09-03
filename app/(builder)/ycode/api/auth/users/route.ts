@@ -1,16 +1,28 @@
 import { NextRequest } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { noCache } from '@/lib/api-response';
-import { getCallerInfo, requireManageMembers } from '@/lib/roles-server';
+import { requireManageMembers } from '@/lib/roles-server';
 import { resolveRole, ASSIGNABLE_ROLES } from '@/lib/roles';
 
 /**
  * GET /ycode/api/auth/users
  *
  * List all users with their status (active or pending invite) and roles.
+ * Requires owner or admin — the same gate as PATCH and DELETE below.
+ *
+ * This handler shipped with NO gate at all: `/ycode/api/auth/` is a PUBLIC prefix in
+ * proxy.ts (auth callbacks must reach it before a session exists), so the roster —
+ * every email, user UUID, role and last-sign-in time — was readable anonymously. The
+ * `getCallerInfo()` call further down looked like authentication but only labelled the
+ * response with the caller's role; it never refused anyone. Read permission on the
+ * member list is not weaker than write permission on it, so it takes the same gate.
  */
 export async function GET(request: NextRequest) {
   try {
+    const result = await requireManageMembers();
+    if ('status' in result) return result;
+    const caller = result;
+
     const client = await getSupabaseAdmin();
     if (!client) {
       return noCache({ error: 'Supabase not configured' }, 500);
@@ -25,8 +37,6 @@ export async function GET(request: NextRequest) {
       console.error('[users] Error listing users:', error);
       return noCache({ error: error.message }, 500);
     }
-
-    const caller = await getCallerInfo();
 
     const activeUsers: Array<{
       id: string;
@@ -78,7 +88,7 @@ export async function GET(request: NextRequest) {
     }
 
     return noCache({
-      data: { activeUsers, pendingInvites, callerRole: caller?.role || null },
+      data: { activeUsers, pendingInvites, callerRole: caller.role },
     });
   } catch (error) {
     console.error('[users] Unexpected error:', error);
