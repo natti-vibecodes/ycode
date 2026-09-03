@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { refreshActiveWebhooks } from '@/lib/apps/airtable/sync-service';
+import { isCronRequestAuthorized } from '@/lib/cron-auth';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -7,13 +8,15 @@ export const revalidate = 0;
 /**
  * GET /api/cron/airtable-webhooks
  * Daily cron to refresh Airtable webhooks before they expire.
- * Secured via CRON_SECRET or Vercel's Authorization header.
+ * Secured via CRON_SECRET — Vercel cron sends it as `Authorization: Bearer $CRON_SECRET`.
+ *
+ * The old guard read `if (cronSecret && authHeader !== ...)`, which fails OPEN: with
+ * CRON_SECRET unset the check was skipped entirely and the route served 200 anonymously.
+ * See lib/cron-auth.ts — a missing secret is now a refusal, and the comparison is
+ * constant-time.
  */
 export async function GET(request: NextRequest) {
-  const authHeader = request.headers.get('authorization');
-  const cronSecret = process.env.CRON_SECRET;
-
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+  if (!isCronRequestAuthorized(request.headers.get('authorization'), process.env.CRON_SECRET)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
