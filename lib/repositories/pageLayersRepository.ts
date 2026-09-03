@@ -241,6 +241,33 @@ export async function getAllDraftLayers(): Promise<PageLayers[]> {
 }
 
 /**
+ * Get all published layers
+ * Used to resolve a submitting form's stored settings server-side (see
+ * lib/services/form-email-config.server.ts) — the published rows are what a visitor's page was
+ * rendered from.
+ */
+export async function getAllPublishedLayers(): Promise<PageLayers[]> {
+  const client = await getSupabaseAdmin();
+
+  if (!client) {
+    throw new Error('Supabase not configured');
+  }
+
+  const { data, error } = await client
+    .from('page_layers')
+    .select('*')
+    .eq('is_published', true)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    throw new Error(`Failed to fetch published layers: ${error.message}`);
+  }
+
+  return data || [];
+}
+
+/**
  * Get all draft layers for multiple pages
  * Used for batch publishing optimization
  */

@@ -7,7 +7,8 @@ import {
   bulkDeleteFormSubmissions,
 } from '@/lib/repositories/formSubmissionRepository';
 import { dispatchFormSubmittedEvent } from '@/lib/services/webhookService';
-import { sendFormSubmissionEmail, extractReplyToEmail } from '@/lib/services/emailService';
+import { extractReplyToEmail } from '@/lib/services/emailService';
+import { dispatchStoredFormNotification } from '@/lib/services/form-email-config.server';
 import { processAppIntegrations } from '@/lib/apps/integration-service';
 import { noCache } from '@/lib/api-response';
 import { buildSubmissionMetadata, formatLeadWriteFailure } from '@/lib/form-attribution';
@@ -120,26 +121,38 @@ export async function POST(request: NextRequest) {
       metadata,
     });
 
-    // Send email notification if enabled (fire and forget)
-    if (body.email?.enabled && body.email?.to) {
-      // Extract reply-to email from form payload (first email field found)
-      const replyTo = extractReplyToEmail(body.payload);
-
-      sendFormSubmissionEmail(
-        body.email.to,
-        body.email.subject || `New form submission: ${body.form_id}`,
-        {
-          formId: body.form_id,
-          submissionId: submission.id,
-          payload: body.payload,
-          metadata: {
-            ...metadata,
-            submitted_at: submission.created_at,
-          },
-          replyTo,
-        }
+    // Send the email notification (fire and forget).
+    //
+    // SECURITY: `body.email` is IGNORED. This route is public and unauthenticated, and it used
+    // to pass the client-posted `{enabled, to, subject}` straight to the mailer — so once SMTP
+    // credentials exist, any visitor could POST an arbitrary `to` and use the site as a mail
+    // relay with an attacker-chosen subject. The recipient and subject now come only from the
+    // submitting form's own stored `settings.form.email_notification`, resolved server-side.
+    // The renderer may keep posting `email`; nothing it sends affects routing.
+    dispatchStoredFormNotification({
+      formId: body.form_id,
+      submissionId: submission.id,
+      payload: body.payload,
+      metadata: {
+        ...metadata,
+        submitted_at: submission.created_at,
+      },
+      // Reply-To still comes from the payload the visitor typed, which is the point of it — it
+      // only ever populates a Reply-To header on mail sent to OUR stored address.
+      replyTo: extractReplyToEmail(body.payload),
+    }).catch(error => {
+      // notifyFormSubmission is written not to reject; this is a belt-and-braces trace so a
+      // future change there can never go back to failing silently. Storage already succeeded.
+      console.error(
+        '[form-submissions]',
+        JSON.stringify({
+          event: 'form_email_dispatch_threw',
+          form_id: body.form_id,
+          submission_id: submission.id,
+          error: error instanceof Error ? error.message : String(error),
+        })
       );
-    }
+    });
 
     // Process app integrations (fire and forget)
     processAppIntegrations(body.form_id, submission.id, body.payload);
