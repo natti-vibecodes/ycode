@@ -3,6 +3,8 @@ import { getKnexClient } from '@/lib/knex-client';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { STORAGE_BUCKET } from '@/lib/asset-constants';
 import { clearAllCache } from '@/lib/services/cacheService';
+import { noCache } from '@/lib/api-response';
+import { requireManageMembers } from '@/lib/roles-server';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -10,11 +12,25 @@ export const revalidate = 0;
 /**
  * POST /ycode/api/devtools/reset-db
  *
- * DANGEROUS: Deletes all tables in the public schema and empties storage buckets.
- * Authentication enforced by proxy.
+ * DANGEROUS: drops every table in the public schema and deletes the storage bucket.
+ *
+ * The old header said "Authentication enforced by proxy", and that was true but far too
+ * weak: proxy.ts only proves the caller is *a* workspace member, so any designer — the
+ * default role for anyone who signs up and gets added — could destroy the entire site and
+ * all its assets with one POST. There was also no environment guard, so it was live in
+ * production. Now: owner/admin only, and refused outright in production.
  */
 export async function POST() {
   try {
+    // Refuse in production before anything else — this is not an operation that should be
+    // reachable on a live site regardless of who is asking.
+    if (process.env.NODE_ENV === 'production') {
+      return noCache({ error: 'Database reset is disabled in production' }, 403);
+    }
+
+    const result = await requireManageMembers();
+    if ('status' in result) return result;
+
     console.log('[POST /ycode/api/devtools/reset-db] Starting database reset...');
 
     const knex = await getKnexClient();
