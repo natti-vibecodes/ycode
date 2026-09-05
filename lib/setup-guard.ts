@@ -13,8 +13,14 @@
  *     and rewriting `.env`.
  *   - `setup/migrate` ran migrations and seeds anonymously.
  *
- * So the rule is: setup mutations are legal exactly once, while the workspace is genuinely
- * unclaimed. After that every setup mutation route returns 403.
+ * So the rule is: setup routes are legal exactly once, while the workspace is genuinely
+ * unclaimed. After that every guarded setup route returns 403.
+ *
+ * Widened from mutations to reads (SCA-1433): `setup/check-email-confirm` is a GET and was
+ * therefore left open, but "does not mutate" is not the same as "is safe to answer anonymously
+ * forever" — it disclosed a live auth-configuration fact and turned any anonymous request into
+ * an outbound fetch. The test in `lib/setup-guard-coverage.test.ts` now holds every route under
+ * `/ycode/api/setup/` to this guard, with `status` the single documented exemption.
  *
  * `isSetupLocked` only ever locks on a POSITIVE confirmation that the workspace is claimed.
  * A configured-but-unreachable or not-yet-migrated database leaves setup OPEN, because that is
@@ -72,7 +78,9 @@ export async function isSetupLocked(): Promise<boolean> {
 
 /**
  * Returns a 403 response when setup is closed, or null to let the handler continue.
- * Call as the first statement of every setup MUTATION route.
+ * Call as the first statement of every setup route, mutation or read. The one exemption is
+ * `setup/status`, which must stay anonymous forever — the app polls it to discover whether
+ * setup is needed at all, and it answers with booleans only.
  */
 export async function requireSetupOpen() {
   if (await isSetupLocked()) {
