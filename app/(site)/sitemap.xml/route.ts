@@ -20,7 +20,7 @@ import {
   generateSitemapXml,
   getDefaultSitemapSettings,
 } from '@/lib/sitemap-utils';
-import { getRequestOrigin, getSiteBaseUrl } from '@/lib/url-utils';
+import { getRequestOrigin, resolveSiteBaseUrl } from '@/lib/url-utils';
 import type { SitemapSettings, Translation, CollectionItem } from '@/types';
 
 export async function GET() {
@@ -56,9 +56,12 @@ export async function GET() {
       });
     }
 
-    // Auto-generate sitemap
-    const requestOrigin = getRequestOrigin(await headers());
-    const baseUrl = getSiteBaseUrl({ globalCanonicalUrl, requestOrigin }) || '';
+    // Auto-generate sitemap. Request origin is resolved lazily (SCA-1431) so a configured
+    // canonical URL never reaches for client-controllable headers.
+    const baseUrl = await resolveSiteBaseUrl({
+      globalCanonicalUrl,
+      resolveRequestOrigin: async () => getRequestOrigin(await headers()),
+    }) || '';
 
     // Fetch published pages and folders
     const [pages, folders, locales] = await Promise.all([

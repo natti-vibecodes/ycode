@@ -307,22 +307,10 @@ export default async function Page({ params }: PageProps) {
   // First evaluate without cookies() so non-protected pages stay cacheable.
   const folders = await fetchCachedFoldersForAuth();
 
-  // Redirect off-canonical dynamic slugs (e.g. a default slug requested under a
-  // translated locale) to the canonical localized URL to avoid duplicate content.
-  if (page.is_dynamic && collectionItem) {
-    const canonicalPath = getOffCanonicalDynamicRedirect({
-      page,
-      folders,
-      locale,
-      translations,
-      itemId: collectionItem.id,
-      currentPath,
-    });
-    if (canonicalPath) {
-      permanentRedirect(canonicalPath);
-    }
-  }
-
+  // SECURITY (SCA-1432): the off-canonical redirect below MUST stay after this gate.
+  // It emits a 308 whose Location header carries the item's canonical slug — exactly the
+  // thing the password gate exists to withhold — so running it first answered an
+  // unauthenticated request with protected content.
   const protectionCheck = getPasswordProtection(page, folders, null);
 
   // If page is protected, opt into dynamic rendering and read the auth cookie.
@@ -374,6 +362,24 @@ export default async function Page({ params }: PageProps) {
           </div>
         </div>
       );
+    }
+  }
+
+  // Redirect off-canonical dynamic slugs (e.g. a default slug requested under a
+  // translated locale) to the canonical localized URL to avoid duplicate content.
+  // Deliberately AFTER the password gate (SCA-1432): a locked visitor has already been
+  // served the 401 above and never reaches this, so the canonical slug stays withheld.
+  if (page.is_dynamic && collectionItem) {
+    const canonicalPath = getOffCanonicalDynamicRedirect({
+      page,
+      folders,
+      locale,
+      translations,
+      itemId: collectionItem.id,
+      currentPath,
+    });
+    if (canonicalPath) {
+      permanentRedirect(canonicalPath);
     }
   }
 

@@ -8,16 +8,18 @@ import { NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { getSettingsByKeys } from '@/lib/repositories/settingsRepository';
 import { credentials } from '@/lib/credentials';
-import { getRequestOrigin, getSiteBaseUrl } from '@/lib/url-utils';
+import { getRequestOrigin, resolveSiteBaseUrl } from '@/lib/url-utils';
 import type { SitemapSettings } from '@/types';
 
 export async function GET() {
   try {
-    const requestOrigin = getRequestOrigin(await headers());
+    // Lazy on purpose (SCA-1431): reading headers eagerly opts this route into dynamic
+    // rendering even when a canonical URL is configured and the origin is never consulted.
+    const resolveRequestOrigin = async () => getRequestOrigin(await headers());
 
     const hasSupabaseCredentials = await credentials.exists();
     if (!hasSupabaseCredentials) {
-      const baseUrl = getSiteBaseUrl({ requestOrigin }) || '';
+      const baseUrl = await resolveSiteBaseUrl({ resolveRequestOrigin }) || '';
       const fallback = `# Default robots.txt
 User-agent: *
 Allow: /
@@ -37,7 +39,10 @@ Sitemap: ${baseUrl}/sitemap.xml`;
     const allSettings = await getSettingsByKeys(['robots_txt', 'sitemap', 'global_canonical_url']);
     const sitemapSettings = allSettings.sitemap as SitemapSettings | null;
     const sitemapEnabled = sitemapSettings?.mode && sitemapSettings.mode !== 'none';
-    const baseUrl = getSiteBaseUrl({ globalCanonicalUrl: allSettings.global_canonical_url, requestOrigin }) || '';
+    const baseUrl = await resolveSiteBaseUrl({
+      globalCanonicalUrl: allSettings.global_canonical_url,
+      resolveRequestOrigin,
+    }) || '';
 
     let content: string;
 
