@@ -76,6 +76,15 @@ export function mimeToExtension(mimeType: string): string {
     'audio/webm': 'weba',
     'audio/aac': 'aac',
     'application/pdf': 'pdf',
+    // Site code. Without these three the fallback below takes the subtype verbatim, so
+    // `text/javascript` produced `/a/<hash>/site.javascript` — a working URL, but not one
+    // anybody hand-writes, so `/a/<hash>/site.js` cost a 301 on every guess. Chrome is
+    // referenced through this path on every page of the site (SCA-1469), which is what
+    // made the cosmetics worth a line. `text/css` already resolved to `css` through the
+    // fallback; it is spelled out here so the three site-code types read as one decision.
+    'text/css': 'css',
+    'text/javascript': 'js',
+    'application/javascript': 'js',
   };
 
   return map[mimeType] || mimeType.split('/').pop() || 'bin';
