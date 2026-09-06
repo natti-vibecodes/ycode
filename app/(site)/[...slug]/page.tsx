@@ -7,7 +7,6 @@ import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { buildSlugPath } from '@/lib/page-utils';
 import { generatePageMetadata, fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { fetchPageByPath, fetchPageByPathForMetadata, fetchErrorPage, splitPageData, reassemblePageData, slimPageData } from '@/lib/page-fetcher';
-import { fetchWithOneRetry } from '@/lib/page-fetch-error';
 import PageRenderer from '@/components/PageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
@@ -167,13 +166,15 @@ async function fetchPublishedPageWithLayers(slugPath: string) {
 
   // A THROWN error is never written to unstable_cache; a RETURNED null is, forever
   // (`revalidate: false`). So `fetchPageByPath` must throw on backend failure and return
-  // null only when the page genuinely does not exist — see lib/page-fetch-error.ts. One
-  // retry absorbs a single Supabase blip; a second failure propagates as an error response
-  // rather than being frozen into a 404 until the next publish.
+  // null only when the page genuinely does not exist — see lib/page-fetch-error.ts. The one
+  // retry that absorbs a single Supabase blip lives INSIDE `fetchPageByPath`, under React's
+  // `cache()`: retrying out here awaited the same memoised rejected promise twice and never
+  // performed a second read. A second real failure propagates as an error response rather
+  // than being frozen into a 404 until the next publish.
   const [core, layers] = await Promise.all([
     unstable_cache(
       async () => {
-        const data = await fetchWithOneRetry(() => fetchPageByPath(slugPath, true));
+        const data = await fetchPageByPath(slugPath, true);
         if (!data) return null;
         return splitPageData(data).core;
       },
@@ -182,7 +183,7 @@ async function fetchPublishedPageWithLayers(slugPath: string) {
     )(),
     unstable_cache(
       async () => {
-        const data = await fetchWithOneRetry(() => fetchPageByPath(slugPath, true));
+        const data = await fetchPageByPath(slugPath, true);
         if (!data) return null;
         return splitPageData(data).layers;
       },
@@ -199,7 +200,7 @@ async function fetchPublishedPageForMetadata(slugPath: string) {
   // Same contract as the page read: a backend failure must not be cached as the
   // "Page Not Found" + noindex title (three live service pages served exactly that).
   return unstable_cache(
-    async () => fetchWithOneRetry(() => fetchPageByPathForMetadata(slugPath, true)),
+    async () => fetchPageByPathForMetadata(slugPath, true),
     [`metadata-/${slugPath}`],
     { tags: [`route-/${slugPath}`, 'all-pages'], revalidate: false }
   )();
@@ -244,7 +245,7 @@ async function fetchCachedFoldersForAuth() {
   // Deliberately NOT caught: an empty folder list is cached until the next publish and
   // silently unlocks every folder-protected page. Failing the request is the safe outcome.
   return unstable_cache(
-    async () => fetchWithOneRetry(() => fetchFoldersForAuth(true)),
+    async () => fetchFoldersForAuth(true),
     ['data-for-auth-folders'],
     { tags: ['all-pages'], revalidate: false }
   )();
@@ -253,7 +254,7 @@ async function fetchCachedFoldersForAuth() {
 async function fetchCachedErrorPage(errorCode: 401 | 404) {
   return unstable_cache(
     async () => {
-      const data = await fetchWithOneRetry(() => fetchErrorPage(errorCode, true));
+      const data = await fetchErrorPage(errorCode, true);
       return data ? slimPageData(data) : null;
     },
     [`error-${errorCode}`],
