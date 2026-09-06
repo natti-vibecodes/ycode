@@ -4,6 +4,7 @@ import type { NextRequest } from 'next/server';
 import { isWorkspaceMember } from '@/lib/roles';
 import { applySecurityHeaders } from '@/lib/security-headers-server';
 import { resolveProxyAuth } from '@/lib/proxy-auth-config';
+import { isMissingSiteRoute } from '@/lib/route-existence';
 
 /**
  * Public API routes that skip authentication.
@@ -159,6 +160,34 @@ export async function proxy(request: NextRequest) {
     && !pathname.startsWith('/_next')
     && !pathname.startsWith('/api')
     && !pathname.startsWith('/dynamic');
+
+  /**
+   * A missing URL is answered by the `/404` route, not by `notFound()` (SCA-1465).
+   *
+   * `notFound()` from the catch-all page returns a real 404 status with a hardcoded, EMPTY
+   * `<html id="__next_error__">` document — Next 16.3 has no server-side not-found boundary
+   * for a `notFound()` thrown inside a matched page, so the real 404 UI only appears after
+   * hydration and every non-hydrating consumer (Googlebot included) receives a blank page.
+   * Rewriting here reaches `app/(site)/404/page.tsx`, which Next renders as a normal
+   * document *and* serves with a 404 status because its route path is exactly `/404`.
+   *
+   * `isMissingSiteRoute` only says `true` when the page's OWN resolver reported a genuine
+   * absence; a backend failure, a redirect match, or any non-page path shape leaves the
+   * request untouched, so this can never invent a 404 for a page that exists.
+   */
+  if (isPublicPage && (request.method === 'GET' || request.method === 'HEAD')) {
+    if (await isMissingSiteRoute(pathname)) {
+      const notFoundUrl = request.nextUrl.clone();
+      notFoundUrl.pathname = '/404';
+      notFoundUrl.search = '';
+
+      const notFoundResponse = NextResponse.rewrite(notFoundUrl);
+      notFoundResponse.headers.set('x-pathname', pathname);
+      await applySecurityHeaders(notFoundResponse);
+      return notFoundResponse;
+    }
+  }
+
   const hasPaginationParams = Array.from(request.nextUrl.searchParams.keys())
     .some((key) => key.startsWith('p_'));
 
