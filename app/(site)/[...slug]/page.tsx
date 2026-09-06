@@ -7,6 +7,7 @@ import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { buildSlugPath } from '@/lib/page-utils';
 import { generatePageMetadata, fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { fetchPageByPath, fetchPageByPathForMetadata, fetchErrorPage, splitPageData, reassemblePageData, slimPageData } from '@/lib/page-fetcher';
+import { fetchWithOneRetry } from '@/lib/page-fetch-error';
 import PageRenderer from '@/components/PageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
@@ -164,10 +165,15 @@ async function fetchPublishedPageWithLayers(slugPath: string) {
   const tags = [`route-/${slugPath}`, 'all-pages'];
   const opts = { tags, revalidate: false as const };
 
+  // A THROWN error is never written to unstable_cache; a RETURNED null is, forever
+  // (`revalidate: false`). So `fetchPageByPath` must throw on backend failure and return
+  // null only when the page genuinely does not exist — see lib/page-fetch-error.ts. One
+  // retry absorbs a single Supabase blip; a second failure propagates as an error response
+  // rather than being frozen into a 404 until the next publish.
   const [core, layers] = await Promise.all([
     unstable_cache(
       async () => {
-        const data = await fetchPageByPath(slugPath, true);
+        const data = await fetchWithOneRetry(() => fetchPageByPath(slugPath, true));
         if (!data) return null;
         return splitPageData(data).core;
       },
@@ -176,7 +182,7 @@ async function fetchPublishedPageWithLayers(slugPath: string) {
     )(),
     unstable_cache(
       async () => {
-        const data = await fetchPageByPath(slugPath, true);
+        const data = await fetchWithOneRetry(() => fetchPageByPath(slugPath, true));
         if (!data) return null;
         return splitPageData(data).layers;
       },
@@ -190,8 +196,10 @@ async function fetchPublishedPageWithLayers(slugPath: string) {
 }
 
 async function fetchPublishedPageForMetadata(slugPath: string) {
+  // Same contract as the page read: a backend failure must not be cached as the
+  // "Page Not Found" + noindex title (three live service pages served exactly that).
   return unstable_cache(
-    async () => fetchPageByPathForMetadata(slugPath, true),
+    async () => fetchWithOneRetry(() => fetchPageByPathForMetadata(slugPath, true)),
     [`metadata-/${slugPath}`],
     { tags: [`route-/${slugPath}`, 'all-pages'], revalidate: false }
   )();
@@ -233,21 +241,19 @@ async function fetchCachedGlobalSettings() {
 }
 
 async function fetchCachedFoldersForAuth() {
-  try {
-    return await unstable_cache(
-      async () => fetchFoldersForAuth(true),
-      ['data-for-auth-folders'],
-      { tags: ['all-pages'], revalidate: false }
-    )();
-  } catch {
-    return [];
-  }
+  // Deliberately NOT caught: an empty folder list is cached until the next publish and
+  // silently unlocks every folder-protected page. Failing the request is the safe outcome.
+  return unstable_cache(
+    async () => fetchWithOneRetry(() => fetchFoldersForAuth(true)),
+    ['data-for-auth-folders'],
+    { tags: ['all-pages'], revalidate: false }
+  )();
 }
 
 async function fetchCachedErrorPage(errorCode: 401 | 404) {
   return unstable_cache(
     async () => {
-      const data = await fetchErrorPage(errorCode, true);
+      const data = await fetchWithOneRetry(() => fetchErrorPage(errorCode, true));
       return data ? slimPageData(data) : null;
     },
     [`error-${errorCode}`],
@@ -419,10 +425,13 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   ]);
 
   if (!data) {
-    return {
-      title: 'Page Not Found',
-      robots: { index: false, follow: false },
-    };
+    // No `robots` here (audit #22). Next emits `<meta name="robots" content="noindex">` itself
+    // for any response above 400 (`NonIndex` in next/dist/server/app-render/app-render.js), and
+    // this branch's copy was the SECOND robots tag on the served 404 — visible again after
+    // hydration, where the client re-applies this route's metadata over the not-found boundary's.
+    // (This branch is now reached only for a genuinely missing page: a backend failure throws —
+    // see lib/page-fetch-error.ts — so it can no longer be the poisoned "Page Not Found" title.)
+    return { title: 'Page Not Found' };
   }
 
   // Don't leak metadata for protected pages. Checking without cookies keeps

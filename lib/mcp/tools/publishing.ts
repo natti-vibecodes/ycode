@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { getUnpublishedPages, getAllDraftPages } from '@/lib/repositories/pageRepository';
+import { getUnpublishedPageChanges, getUnpublishedPages, getAllDraftPages } from '@/lib/repositories/pageRepository';
 import { getUnpublishedLayerStyles, publishLayerStyles } from '@/lib/repositories/layerStyleRepository';
 import { getAllComponents, getUnpublishedComponents, publishComponents } from '@/lib/repositories/componentRepository';
 import { getAllCollections, getUnpublishedCollections } from '@/lib/repositories/collectionRepository';
@@ -43,8 +43,13 @@ export function registerPublishingTools(server: McpServer) {
     'Check what changes are pending and need to be published. Reports unpublished pages, styles, components, collections, fonts, assets, translations, and locales.',
     {},
     async () => {
+      // getUnpublishedPageChanges(), NOT getUnpublishedPages(): the latter filters
+      // `deleted_at is null`, so a page queued for DELETION was invisible here — the /nyc
+      // soft-delete reported an empty queue while a publish was about to remove a live URL
+      // (audit #37). Deletions are the one queued change that cannot be undone by republishing,
+      // so they are exactly what a pre-publish check must show.
       const [pages, styles, components, collections, fonts, assets, assetFolders, translations, locales, globals] = await Promise.all([
-        getUnpublishedPages().catch(() => []),
+        getUnpublishedPageChanges().catch(() => []),
         getUnpublishedLayerStyles().catch(() => []),
         getUnpublishedComponents().catch(() => []),
         getUnpublishedCollections().catch(() => []),
@@ -65,7 +70,12 @@ export function registerPublishingTools(server: McpServer) {
           type: 'text' as const,
           text: JSON.stringify({
             has_unpublished_changes: hasChanges,
-            unpublished_pages: pages.map((p) => ({ id: p.id, name: p.name })),
+            // `status` is 'new' | 'modified' | 'deleted' | 'unpublishing'. A 'deleted' entry means
+            // the page WILL BE REMOVED from the live site by this publish.
+            unpublished_pages: pages.map((p) => ({ id: p.id, name: p.name, status: p.status })),
+            pending_page_deletions: pages
+              .filter((p) => p.status === 'deleted' || p.status === 'unpublishing')
+              .map((p) => ({ id: p.id, name: p.name, status: p.status })),
             unpublished_styles: styles.map((s) => ({ id: s.id, name: s.name })),
             unpublished_components: components.map((c: { id: string; name: string }) => ({ id: c.id, name: c.name })),
             unpublished_collections: collections.map((c: { id: string; name: string }) => ({ id: c.id, name: c.name })),

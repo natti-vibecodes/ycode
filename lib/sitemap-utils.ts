@@ -155,13 +155,14 @@ export function generateSitemapUrls(
   }>
 ): SitemapUrl[] {
   const urls: SitemapUrl[] = [];
+  const dynamicUrls: SitemapUrl[] = [];
 
   for (const page of pages) {
     if (page.is_dynamic && page.settings?.cms) {
       // Dynamic page - generate URLs for each collection item
       const data = dynamicPageData.get(page.id);
       if (data) {
-        urls.push(...buildDynamicPageUrls(
+        dynamicUrls.push(...buildDynamicPageUrls(
           page,
           folders,
           baseUrl,
@@ -186,7 +187,26 @@ export function generateSitemapUrls(
     }
   }
 
-  return urls;
+  // 🔴 A sitemap must never list the same <loc> twice (audit #14). It did: 181 entries for 161
+  // unique URLs, because 20 hand-built case-study pages live in the same folder as a dynamic
+  // CMS template whose collection carries the same 20 slugs — each URL was emitted once as a
+  // static page and once as a collection item. Search engines read a duplicated loc as a
+  // crawl-budget signal about the site's own consistency, and the two entries can disagree on
+  // lastmod/changefreq.
+  //
+  // STATIC WINS. A concrete page at a path is what the router actually serves (the exact match
+  // is tried before dynamic resolution in lib/page-fetcher.ts), so its metadata is the truthful
+  // one. Dedupe is applied here, at the single point where both sources meet, rather than in
+  // either builder — that is what stops the next URL source from reintroducing it.
+  const seen = new Set<string>();
+  const deduped: SitemapUrl[] = [];
+  for (const url of [...urls, ...dynamicUrls]) {
+    if (seen.has(url.loc)) continue;
+    seen.add(url.loc);
+    deduped.push(url);
+  }
+
+  return deduped;
 }
 
 /**

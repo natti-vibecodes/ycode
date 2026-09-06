@@ -82,6 +82,11 @@ interface PublishResult {
   };
   published_at_setting: Setting;
   stats: PublishStats;
+  /**
+   * Steps that failed without aborting the publish. Empty on a fully clean publish.
+   * A publish that reports 200 with a non-empty `warnings` did NOT do everything it claims.
+   */
+  warnings: Array<{ step: string; message: string }>;
 }
 
 /** Creates an empty table stats object */
@@ -182,6 +187,7 @@ export async function POST(request: NextRequest) {
         value: publishedAt,
       } as Setting,
       stats,
+      warnings: [],
     };
 
     // Determine if we're publishing all or specific items
@@ -500,10 +506,17 @@ export async function POST(request: NextRequest) {
         // Non-fatal: route resolution failure should not block deletion
       }
 
+      // 🔴 NOT non-fatal (audit C1 / #37). A page deletion that fails here used to be swallowed
+      // twice over — once inside hardDeleteSoftDeletedPages (which deleted the retry marker
+      // anyway) and once here — so a publish reported success while the page stayed live and the
+      // pending deletion was gone for good. The repository now fails before touching the marker,
+      // and the failure is reported to the caller instead of being dropped.
       try {
         await hardDeleteSoftDeletedPages();
-      } catch {
-        // Non-fatal
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[Publish] Page deletion cleanup FAILED — pages queued for deletion are still live:', message);
+        result.warnings.push({ step: 'page_deletions', message });
       }
 
       try {
@@ -944,7 +957,9 @@ export async function POST(request: NextRequest) {
 
     return noCache({
       data: result,
-      message: `Published a total of ${totalPublished} item(s) successfully`,
+      message: result.warnings.length > 0
+        ? `Published ${totalPublished} item(s), but ${result.warnings.length} cleanup step(s) FAILED: ${result.warnings.map(w => `${w.step}: ${w.message}`).join('; ')}`
+        : `Published a total of ${totalPublished} item(s) successfully`,
     });
   } catch (error) {
     stats.totalDurationMs = Math.round(performance.now() - startTime);

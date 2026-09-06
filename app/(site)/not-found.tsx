@@ -32,10 +32,17 @@ function fetchCachedCustom404(tenantId?: string) {
 export async function generateMetadata(): Promise<Metadata> {
   const tenantId = tenantStore.getStore();
   const errorPageData = await fetchCachedCustom404(tenantId).catch(() => null);
-  if (!errorPageData) {
-    return { title: 'Page not found', robots: { index: false, follow: false } };
-  }
-  return generatePageMetadata(errorPageData.page);
+  const metadata: Metadata = errorPageData
+    ? await generatePageMetadata(errorPageData.page)
+    : { title: 'Page not found' };
+
+  // 🔴 Do NOT emit our own robots meta here (audit #22). Next renders
+  // `<meta name="robots" content="noindex">` for any response whose status is > 400
+  // (`NonIndex` in next/dist/server/app-render/app-render.js), so anything we add is a SECOND,
+  // conflicting robots tag on the same document — the served 404 carried both `noindex` and
+  // `noindex, nofollow`. One directive, emitted by the layer that knows the status code.
+  delete metadata.robots;
+  return metadata;
 }
 
 /**

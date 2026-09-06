@@ -1,6 +1,7 @@
 import type { Page, PageFolder } from '@/types';
 import { createHmac, randomUUID } from 'crypto';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { PageFetchError } from '@/lib/page-fetch-error';
 
 /**
  * Page Password Protection Utilities
@@ -211,13 +212,21 @@ export function getPasswordProtection(
  */
 export async function fetchFoldersForAuth(isPublished: boolean): Promise<PageFolder[]> {
   const supabase = await getSupabaseAdmin();
-  if (!supabase) return [];
+  // Never return [] on a backend failure: the caller caches this result until the next publish,
+  // and an empty folder list silently disables folder-level password protection sitewide.
+  if (!supabase) {
+    throw new PageFetchError('Supabase not configured');
+  }
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('page_folders')
     .select('*')
     .eq('is_published', isPublished)
     .is('deleted_at', null);
+
+  if (error) {
+    throw new PageFetchError(`Failed to fetch page_folders: ${error.message ?? String(error)}`, error);
+  }
 
   return (data as PageFolder[]) || [];
 }

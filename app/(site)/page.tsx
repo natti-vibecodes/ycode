@@ -4,6 +4,7 @@ import { unstable_cache } from 'next/cache';
 import { addCacheTag } from '@vercel/functions';
 import Link from 'next/link';
 import { fetchHomepage, fetchErrorPage, splitPageData, reassemblePageData, slimPageData } from '@/lib/page-fetcher';
+import { fetchWithOneRetry } from '@/lib/page-fetch-error';
 import type { PageData } from '@/lib/page-fetcher';
 import PageRenderer from '@/components/PageRenderer';
 import PasswordForm from '@/components/PasswordForm';
@@ -34,10 +35,11 @@ async function fetchPublishedHomepage() {
   const tags = ['route-/', 'all-pages'];
   const opts = { tags, revalidate: false as const };
 
+  // See lib/page-fetch-error.ts: backend failure throws (never cached), absence returns null.
   const [core, layers] = await Promise.all([
     unstable_cache(
       async () => {
-        const data = await fetchHomepage(true);
+        const data = await fetchWithOneRetry(() => fetchHomepage(true));
         if (!data) return null;
         return splitPageData(data as PageData).core;
       },
@@ -46,7 +48,7 @@ async function fetchPublishedHomepage() {
     )(),
     unstable_cache(
       async () => {
-        const data = await fetchHomepage(true);
+        const data = await fetchWithOneRetry(() => fetchHomepage(true));
         if (!data) return null;
         return splitPageData(data as PageData).layers;
       },
@@ -95,21 +97,18 @@ async function fetchCachedRedirects(): Promise<RedirectType[] | null> {
 }
 
 async function fetchCachedFoldersForAuth() {
-  try {
-    return await unstable_cache(
-      async () => fetchFoldersForAuth(true),
-      ['data-for-auth-folders'],
-      { tags: ['all-pages'], revalidate: false }
-    )();
-  } catch {
-    return [];
-  }
+  // Not caught: a cached empty folder list unlocks every folder-protected page.
+  return unstable_cache(
+    async () => fetchWithOneRetry(() => fetchFoldersForAuth(true)),
+    ['data-for-auth-folders'],
+    { tags: ['all-pages'], revalidate: false }
+  )();
 }
 
 async function fetchCachedErrorPage(errorCode: 401) {
   return unstable_cache(
     async () => {
-      const data = await fetchErrorPage(errorCode, true);
+      const data = await fetchWithOneRetry(() => fetchErrorPage(errorCode, true));
       return data ? slimPageData(data) : null;
     },
     [`error-${errorCode}`],

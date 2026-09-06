@@ -1315,7 +1315,14 @@ export async function hardDeleteSoftDeletedPages(): Promise<{ count: number; del
 
   const ids = deletedDrafts.map(p => p.id);
 
-  // Delete published versions first (CASCADE removes page_layers)
+  // Delete published versions first (CASCADE removes page_layers).
+  //
+  // 🔴 THIS FAILURE MUST BE FATAL (audit C1 / #37). It used to be logged and swallowed, and the
+  // draft soft-delete row — the ONLY record that a deletion is pending — was then deleted anyway
+  // and success reported. A transient failure here therefore left the page LIVE with nothing left
+  // to retry from: the queue read clean, the builder showed the page gone, and the deletion could
+  // never be replayed through the normal publish path. These two deletes are not one transaction,
+  // so ORDER is the guarantee: the marker is only removed once the published row is provably gone.
   const { error: pubError } = await client
     .from('pages')
     .delete()
@@ -1323,7 +1330,7 @@ export async function hardDeleteSoftDeletedPages(): Promise<{ count: number; del
     .eq('is_published', true);
 
   if (pubError) {
-    console.error('Failed to delete published pages:', pubError);
+    throw new Error(`Failed to delete published pages: ${pubError.message}`);
   }
 
   // Delete soft-deleted draft versions (CASCADE removes page_layers)

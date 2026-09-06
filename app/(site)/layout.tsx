@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import RootLayoutShell, { defaultMetadata } from '@/components/RootLayoutShell';
 import { fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { renderRootLayoutHeadCode, extractHtmlAttributes } from '@/lib/parse-head-html';
+import { fetchSiteLang, DEFAULT_SITE_LANG } from '@/lib/site-lang';
 
 export async function generateMetadata(): Promise<Metadata> {
   if (process.env.SKIP_SETUP === 'true') {
@@ -37,6 +38,12 @@ export default async function SiteLayout({
   let headElements: React.ReactNode[] = [];
   let htmlAttributes: Record<string, string> = {};
 
+  // <html lang> must exist in the SERVER response (audit #16). `htmlAttributes` is spread after
+  // this, so an explicit `lang` in the `ycode:html-attributes` meta still wins.
+  const lang = process.env.SKIP_SETUP === 'true'
+    ? DEFAULT_SITE_LANG
+    : await fetchSiteLang(true);
+
   // Cloud mode uses ISR with explicit tenantId — calling headers() here
   // would force all pages dynamic. Cloud injects global head code from PageRenderer instead.
   if (process.env.SKIP_SETUP !== 'true') {
@@ -57,6 +64,7 @@ export default async function SiteLayout({
   // glyphs thinner/lighter than the original site.
   return (
     <RootLayoutShell
+      lang={lang}
       headElements={headElements} htmlAttributes={htmlAttributes}
       bodyClassName="font-sans"
     >

@@ -54,6 +54,17 @@ function bootCommit(): string {
 
 const nextConfig: NextConfig = {
   /**
+   * Stop `next dev` re-appending its own block to AGENTS.md on every boot (audit item #33).
+   *
+   * Next 16.3's `start-server.js` calls `writeAgentFiles()` unless this is explicitly `false`
+   * (`node_modules/next/dist/server/lib/start-server.js:418-426`), which left AGENTS.md
+   * permanently dirty in git and re-dirtied it after every checkout. `agentRules` is a
+   * top-level config key in this version (`next/dist/server/config-shared.d.ts:1574`) — the
+   * audit's "no opt-out" reading was of an older Next.
+   */
+  agentRules: false,
+
+  /**
    * Build output directory (SCA-1316). The REVIEW server on :3003 must not share `.next` with
    * the dev server on :3002 — two Next processes over one build dir is what produced
    * MODULE_UNPARSABLE and a dead site on 2026-08-12. `npm run review` sets NEXT_DIST_DIR.

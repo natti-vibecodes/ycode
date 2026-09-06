@@ -1,6 +1,7 @@
 import { cache } from 'react';
 import { escapeHtml } from '@/lib/escape-html';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { PageFetchError, asPageFetchError } from '@/lib/page-fetch-error';
 import { getKnexClient } from '@/lib/knex-client';
 import { buildSlugPath, buildDynamicPageUrl, buildLocalizedDynamicPageUrl, detectLocaleFromPath, matchPageWithTranslatedSlugs, matchDynamicPageWithTranslatedSlugs } from '@/lib/page-utils';
 import { getItemWithValues, getItemsWithValues, getItemsWithValuesByIds, getItemIdsByFieldValue, getItemsByCollectionId, getSlugsByItemIds } from '@/lib/repositories/collectionItemRepository';
@@ -515,19 +516,35 @@ async function fetchPageByPathInternal(
     const supabase = await getSupabaseAdmin(tenantId);
 
     if (!supabase) {
-      console.error('Supabase not configured');
-      return null;
+      // Infrastructure failure, NOT "no such page". Throwing keeps it out of unstable_cache.
+      throw new PageFetchError('Supabase not configured');
     }
 
     // Fetch shared page lookup data in parallel.
     // Components/timezone are only needed when resolving layers.
-    const [{ data: availableLocales }, { data: pages }, { data: folders }, components, timezoneRaw] = await Promise.all([
+    const [localesResult, pagesResult, foldersResult, components, timezoneRaw] = await Promise.all([
       supabase.from('locales').select('*').eq('is_published', isPublished).is('deleted_at', null),
       supabase.from('pages').select('*').eq('is_published', isPublished).is('deleted_at', null),
       supabase.from('page_folders').select('*').eq('is_published', isPublished).is('deleted_at', null),
       resolveLayers ? fetchComponents(supabase, isPublished) : Promise.resolve([] as Component[]),
       resolveLayers ? getSettingByKey('timezone') : Promise.resolve('UTC'),
     ]);
+    // A query ERROR is a backend failure; an empty result set is a legitimate answer.
+    // Collapsing the two is exactly what turned a Supabase blip into a permanent cached 404.
+    for (const [table, result] of [
+      ['locales', localesResult],
+      ['pages', pagesResult],
+      ['page_folders', foldersResult],
+    ] as const) {
+      if (result?.error) {
+        throw new PageFetchError(`Failed to fetch ${table}: ${result.error.message ?? String(result.error)}`, result.error);
+      }
+    }
+
+    const availableLocales = localesResult?.data;
+    const pages = pagesResult?.data;
+    const folders = foldersResult?.data;
+
     const timezone = (timezoneRaw as string | null) || 'UTC';
 
     const validLocaleCodes = availableLocales?.map(l => l.code) || [];
@@ -548,7 +565,8 @@ async function fetchPageByPathInternal(
     }
 
     if (!pages || !folders) {
-      return null;
+      // No error, but no rows object either — the read did not succeed. Never cache this as a 404.
+      throw new PageFetchError('Page lookup returned no data for pages or page_folders');
     }
 
     const targetPath = pathWithoutLocale;
@@ -698,8 +716,13 @@ async function fetchPageByPathInternal(
               .single();
 
             if (layersError) {
-              console.error(`Failed to fetch ${isPublished ? 'published' : 'draft'} layers:`, layersError);
-              return null;
+              // PGRST116 = no layers row for this page. That is an ANSWER (a 404), and it stays
+              // cacheable; every other error is a backend failure and must not be cached as one.
+              if (layersError.code === 'PGRST116') return null;
+              throw new PageFetchError(
+                `Failed to fetch ${isPublished ? 'published' : 'draft'} layers: ${layersError.message ?? String(layersError)}`,
+                layersError
+              );
             }
 
             // Resolve reference fields in the collection item values
@@ -851,8 +874,13 @@ async function fetchPageByPathInternal(
       .single();
 
     if (layersError) {
-      console.error(`Failed to fetch ${isPublished ? 'published' : 'draft'} layers:`, layersError);
-      return null;
+      // PGRST116 = no layers row: a genuinely empty page, cacheable as a 404. Anything else is
+      // a backend failure and must reach the caller as a throw.
+      if (layersError.code === 'PGRST116') return null;
+      throw new PageFetchError(
+        `Failed to fetch ${isPublished ? 'published' : 'draft'} layers: ${layersError.message ?? String(layersError)}`,
+        layersError
+      );
     }
 
     // Translate component-instance override values before resolving components,
@@ -890,8 +918,9 @@ async function fetchPageByPathInternal(
       generatedCss: pageLayers?.generated_css || null,
     };
   } catch (error) {
+    // Rethrow: a swallowed exception here is written into unstable_cache as a permanent 404.
     console.error('Failed to fetch page:', error);
-    return null;
+    throw asPageFetchError(`Failed to fetch page /${slugPath}`, error);
   }
 }
 
@@ -926,25 +955,38 @@ export async function fetchErrorPage(
     const supabase = await getSupabaseAdmin(tenantId);
 
     if (!supabase) {
-      console.error('Supabase not configured');
-      return null;
+      throw new PageFetchError('Supabase not configured');
     }
 
     // Get all active locales from the database
-    const { data: availableLocales } = await supabase
+    const localesResult = await supabase
       .from('locales')
       .select('*')
       .eq('is_published', isPublished)
       .is('deleted_at', null);
 
+    if (localesResult?.error) {
+      throw new PageFetchError(`Failed to fetch locales: ${localesResult.error.message ?? String(localesResult.error)}`, localesResult.error);
+    }
+    const availableLocales = localesResult?.data;
+
     // Get the error page
-    const { data: errorPage } = await supabase
+    const errorPageResult = await supabase
       .from('pages')
       .select('*')
       .eq('error_page', errorCode)
       .eq('is_published', isPublished)
       .is('deleted_at', null)
       .single();
+
+    // PGRST116 = no row: this install has no custom error page. A real answer, cacheable.
+    if (errorPageResult?.error && errorPageResult.error.code !== 'PGRST116') {
+      throw new PageFetchError(
+        `Failed to fetch ${errorCode} error page: ${errorPageResult.error.message ?? String(errorPageResult.error)}`,
+        errorPageResult.error
+      );
+    }
+    const errorPage = errorPageResult?.data;
 
     if (!errorPage) {
       return null;
@@ -962,8 +1004,11 @@ export async function fetchErrorPage(
       .single();
 
     if (layersError) {
-      console.error(`Failed to fetch ${isPublished ? 'published' : 'draft'} error page layers:`, layersError);
-      return null;
+      if (layersError.code === 'PGRST116') return null; // no layers on the error page
+      throw new PageFetchError(
+        `Failed to fetch ${isPublished ? 'published' : 'draft'} error page layers: ${layersError.message ?? String(layersError)}`,
+        layersError
+      );
     }
 
     const components = await fetchComponents(supabase, isPublished);
@@ -996,8 +1041,9 @@ export async function fetchErrorPage(
       translations: {}, // Error pages don't have translations
     };
   } catch (error) {
+    // Rethrow: a cached `null` here means the custom 404 shell is lost until the next publish.
     console.error('Failed to fetch error page:', error);
-    return null;
+    throw asPageFetchError(`Failed to fetch ${errorCode} error page`, error);
   }
 }
 
@@ -1019,19 +1065,30 @@ export const fetchHomepage = cache(async function fetchHomepage(
     const supabase = await getSupabaseAdmin(tenantId);
 
     if (!supabase) {
-      return null;
+      throw new PageFetchError('Supabase not configured');
     }
 
     // Fetch locales, homepage, and components in parallel
     const [
-      { data: availableLocales },
-      { data: homepage },
+      localesResult,
+      homepageResult,
       componentsResult,
     ] = await Promise.all([
       supabase.from('locales').select('*').eq('is_published', isPublished).is('deleted_at', null),
       supabase.from('pages').select('*').eq('is_index', true).is('page_folder_id', null).eq('is_published', isPublished).is('deleted_at', null).limit(1).single(),
       preloadedComponents ? Promise.resolve(preloadedComponents) : fetchComponents(supabase, isPublished),
     ]);
+
+    if (localesResult?.error) {
+      throw new PageFetchError(`Failed to fetch locales: ${localesResult.error.message ?? String(localesResult.error)}`, localesResult.error);
+    }
+    // PGRST116 from .single() is "no homepage row" — a real answer, not a failure.
+    if (homepageResult?.error && homepageResult.error.code !== 'PGRST116') {
+      throw new PageFetchError(`Failed to fetch homepage: ${homepageResult.error.message ?? String(homepageResult.error)}`, homepageResult.error);
+    }
+
+    const availableLocales = localesResult?.data;
+    const homepage = homepageResult?.data;
 
     if (!homepage) {
       return null;
@@ -1051,7 +1108,11 @@ export const fetchHomepage = cache(async function fetchHomepage(
       .single();
 
     if (layersError) {
-      return null;
+      if (layersError.code === 'PGRST116') return null; // no layers on the homepage
+      throw new PageFetchError(
+        `Failed to fetch homepage layers: ${layersError.message ?? String(layersError)}`,
+        layersError
+      );
     }
 
     // Translate component-instance override values before resolving components
@@ -1087,7 +1148,8 @@ export const fetchHomepage = cache(async function fetchHomepage(
       generatedCss: pageLayers?.generated_css || null,
     };
   } catch (error) {
-    return null;
+    // Rethrow — see PageFetchError. A `null` here is cached as a permanent homepage 404.
+    throw asPageFetchError('Failed to fetch homepage', error);
   }
 });
 
