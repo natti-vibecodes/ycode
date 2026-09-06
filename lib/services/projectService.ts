@@ -236,6 +236,38 @@ export function packExport(exportData: ProjectExportData, password?: string): Bu
   return password ? encryptBuffer(compressed, password) : compressed;
 }
 
+/** Chunk size used when streaming the packed export (256 KB). */
+const EXPORT_STREAM_CHUNK_SIZE = 256 * 1024;
+
+/**
+ * Pack the export and expose it as a chunked ReadableStream.
+ * Streaming the response avoids platform buffered-response size caps
+ * (e.g. Vercel's 4.5MB limit) that break downloads of large backups.
+ */
+export function packExportToStream(
+  exportData: ProjectExportData,
+  password?: string,
+  chunkSize: number = EXPORT_STREAM_CHUNK_SIZE
+): { stream: ReadableStream<Uint8Array>; size: number } {
+  const buffer = packExport(exportData, password);
+  const size = buffer.length;
+  let offset = 0;
+
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (offset >= size) {
+        controller.close();
+        return;
+      }
+      const end = Math.min(offset + chunkSize, size);
+      controller.enqueue(new Uint8Array(buffer.subarray(offset, end)));
+      offset = end;
+    },
+  });
+
+  return { stream, size };
+}
+
 // JSON structural byte codes (all ASCII, safe to scan over UTF-8 content).
 const CH_QUOTE = 0x22;
 const CH_BACKSLASH = 0x5c;

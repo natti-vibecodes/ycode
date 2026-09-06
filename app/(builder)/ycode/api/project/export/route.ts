@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   exportProject,
-  packExport,
+  packExportToStream,
   getExportFilename,
   sanitizeProjectNameSlug,
 } from '@/lib/services/projectService';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+export const maxDuration = 300;
 
 /**
  * POST /ycode/api/project/export
@@ -40,14 +41,17 @@ export async function POST(request: NextRequest) {
       result.export.manifest.projectName = sanitizeProjectNameSlug(projectName.trim());
     }
 
-    const fileBuffer = packExport(result.export, password);
+    // Stream the packed file so large backups aren't capped by the
+    // platform's buffered-response size limit (e.g. Vercel's 4.5MB).
+    const { stream, size } = packExportToStream(result.export, password);
     const filename = getExportFilename(result.export.manifest);
 
-    return new NextResponse(new Uint8Array(fileBuffer), {
+    return new NextResponse(stream, {
       status: 200,
       headers: {
         'Content-Type': 'application/octet-stream',
         'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length': String(size),
         'Cache-Control': 'no-store',
       },
     });

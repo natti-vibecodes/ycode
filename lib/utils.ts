@@ -19,6 +19,33 @@ export function hasTextSelection(): boolean {
 }
 
 /**
+ * Extract a readable error message from a failed fetch Response.
+ * Handles both our JSON errors and plain text/HTML from upstream proxies
+ * (e.g. a "Bad Gateway" on timeout), which would otherwise crash JSON.parse.
+ */
+export async function parseErrorResponse(
+  response: Response,
+  fallback = 'Request failed'
+): Promise<string> {
+  const text = await response.text().catch(() => '');
+
+  if (text) {
+    try {
+      const data = JSON.parse(text);
+      if (data?.error) return data.error;
+    } catch {
+      // Not JSON — fall through to the raw text / status handling below.
+    }
+    if (response.headers.get('content-type')?.includes('text/html')) {
+      return `${fallback} (${response.status} ${response.statusText})`;
+    }
+    return text.trim();
+  }
+
+  return `${fallback} (${response.status} ${response.statusText})`;
+}
+
+/**
  * Input Sanitization Utilities
  * Centralized helpers for cleaning user input values
  */

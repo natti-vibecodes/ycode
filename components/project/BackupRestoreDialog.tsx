@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from 'sonner';
 import { ToastError } from '@/lib/toast-error';
+import { parseErrorResponse } from '@/lib/utils';
 
 interface BackupRestoreDialogProps {
   open: boolean;
@@ -80,8 +81,10 @@ export function BackupRestoreDialog({
       });
 
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Backup failed');
+        // The error body may be JSON (from our route) or plain text/HTML
+        // (from an upstream proxy, e.g. a "Bad Gateway" on timeout).
+        const message = await parseErrorResponse(response);
+        throw new Error(message);
       }
 
       const blob = await response.blob();

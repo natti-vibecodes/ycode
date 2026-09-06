@@ -9,7 +9,7 @@ import { getValuesByItemIds } from '@/lib/repositories/collectionItemValueReposi
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
 import { enrichItemsWithCountValues } from '@/lib/repositories/collectionCountRepository';
 import { getLocaleScaffoldTranslations, getCmsTranslationsForItems } from '@/lib/repositories/translationRepository';
-import { getTranslatableKey } from '@/lib/locale-runtime';
+import { getTranslatableKey, slimTranslations } from '@/lib/locale-runtime';
 import type { Page, PageFolder, PageLayers, Component, ComponentVariable, CollectionItemWithValues, CollectionField, Layer, CollectionPaginationMeta, Translation, Locale } from '@/types';
 import { getCollectionVariable, resolveFieldValue, evaluateVisibility, evaluateCondition, getLayerHtmlTag, filterDisabledSliderLayers } from '@/lib/layer-utils';
 import { buildAnchorMap, headingAnchorSlug, tiptapPlainText as sharedTiptapPlainText } from '@/lib/heading-anchors';
@@ -959,6 +959,21 @@ async function fetchPageByPathInternal(
 }
 
 /**
+ * Strip the bulk translation catalog from resolved page data, keeping only the
+ * slug + seo rows still consumed downstream (localized URLs and metadata). Text
+ * and media are already injected into the layer tree, so keeping the full
+ * catalog would only bloat caches and the serialized RSC payload.
+ *
+ * Purely a shape narrowing of an ALREADY-RESOLVED value: it is applied to the
+ * awaited result, never around the fetch, so a rejected read still propagates
+ * out of `cache()` instead of being slimmed into a cacheable `null` (SCA-1460).
+ */
+function withSlimTranslations(data: PageData | null): PageData | null {
+  if (!data?.translations) return data;
+  return { ...data, translations: slimTranslations(data.translations, { includeSeo: true }) };
+}
+
+/**
  * The one retry lives INSIDE the `cache()` boundary, never outside it.
  *
  * React's `cache()` memoises the returned PROMISE for the duration of a request — including a
@@ -966,6 +981,9 @@ async function fetchPageByPathInternal(
  * the *same* rejected promise twice and performed exactly one database read: the retry existed
  * on paper only. Wrapping the un-memoised `fetchPageByPathInternal` instead makes the second
  * attempt a genuine second read, and every caller (routes, preview, static export) inherits it.
+ *
+ * The retry stays the INNERMOST wrapper; upstream's translation slimming (1.30.12) is applied to
+ * whatever that retry finally resolves to.
  */
 export const fetchPageByPath = cache(async function fetchPageByPath(
   slugPath: string,
@@ -973,8 +991,10 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
   paginationContext?: PaginationContext,
   tenantId?: string,
 ): Promise<PageData | null> {
-  return fetchWithOneRetry(() =>
-    fetchPageByPathInternal(slugPath, isPublished, paginationContext, tenantId, { resolveLayers: true })
+  return withSlimTranslations(
+    await fetchWithOneRetry(() =>
+      fetchPageByPathInternal(slugPath, isPublished, paginationContext, tenantId, { resolveLayers: true })
+    )
   );
 });
 
@@ -984,8 +1004,10 @@ export async function fetchPageByPathForMetadata(
   paginationContext?: PaginationContext,
   tenantId?: string,
 ): Promise<PageData | null> {
-  return fetchWithOneRetry(() =>
-    fetchPageByPathInternal(slugPath, isPublished, paginationContext, tenantId, { resolveLayers: false })
+  return withSlimTranslations(
+    await fetchWithOneRetry(() =>
+      fetchPageByPathInternal(slugPath, isPublished, paginationContext, tenantId, { resolveLayers: false })
+    )
   );
 }
 

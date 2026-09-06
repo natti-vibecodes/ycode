@@ -30,7 +30,7 @@ import { REF_PAGE_PREFIX, REF_COLLECTION_PREFIX, isCollectionItemKeyword, parseC
 import { getClassesString, hasPasswordFormLayer } from '@/lib/layer-utils';
 import { buildGlobalsMetaMap, buildGlobalsValueMap } from '@/lib/collection-field-utils';
 import { buildLocalizedPageUrls, type LocalizedDynamicSlug } from '@/lib/page-utils';
-import { getTranslatableKey } from '@/lib/locale-runtime';
+import { getTranslatableKey, slimTranslations } from '@/lib/locale-runtime';
 import { getSlugTranslationsByLocale } from '@/lib/repositories/translationRepository';
 import { buildPageHreflangAlternatesForPage } from '@/lib/generate-page-metadata';
 import { getSiteBaseUrl } from '@/lib/url-utils';
@@ -995,7 +995,11 @@ export default async function PageRenderer({
           folders={toClientFolders(folders) as any}
           collectionItemSlugs={collectionItemSlugs}
           isPreview={isPreview}
-          translations={translations}
+          // Text/media translations are already baked into the layer tree
+          // server-side, so the client only needs slug rows to build localized
+          // link hrefs. Slimming keeps the full per-locale catalog out of the
+          // RSC payload (see issue #447 for the same treatment of components).
+          translations={slimTranslations(translations)}
           resolvedAssets={resolvedAssets}
           // Rich-text embedded components are already pre-resolved into the layer
           // tree (_resolvedLayers), so the client renderer never needs the full

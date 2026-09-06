@@ -105,6 +105,35 @@ export function getTranslatedAssetId(
   return originalAssetId;
 }
 
+/**
+ * Slim a per-locale translation catalog down to only the rows still needed
+ * after server-side injection. Text/media translations are already baked into
+ * the layer tree (via `injectTranslatedText`), so we drop them and keep:
+ *   - slug rows — localized link/URL building (client + server)
+ *   - seo rows (when `includeSeo`) — localized <title>/description/OG image
+ * Dropping the rest keeps the full ~MB catalog out of `PageData` and the
+ * serialized RSC/hydration payload on every localized page.
+ */
+export function slimTranslations(
+  translations: Record<string, Translation> | null | undefined,
+  options?: { includeSeo?: boolean }
+): Record<string, Translation> | undefined {
+  if (!translations) return undefined;
+
+  const includeSeo = options?.includeSeo ?? false;
+  const slim: Record<string, Translation> = {};
+  for (const key in translations) {
+    const contentKey = translations[key].content_key;
+    const keep = contentKey === 'slug'
+      || contentKey.endsWith(':slug')
+      || (includeSeo && contentKey.startsWith('seo:'));
+    if (keep) {
+      slim[key] = translations[key];
+    }
+  }
+  return slim;
+}
+
 /** Get translated text if a translation exists, otherwise return the original. */
 export function getTranslatedText(
   originalText: string | undefined,

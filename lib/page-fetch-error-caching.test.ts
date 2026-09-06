@@ -348,3 +348,42 @@ describe('fetchWithOneRetry', () => {
     assert.equal(calls, 1);
   });
 });
+
+/**
+ * Upstream 1.30.12 wrapped these same two fetchers in `withSlimTranslations`. The merge had to
+ * decide the nesting order, and only one order is safe: the retry stays INNERMOST and slimming is
+ * applied to whatever it finally resolves to. The wrong order — slimming around the fetch — would
+ * put a `try`/shape step between the throw and the caller, which is exactly how audit #10's
+ * transient failures became cached permanent 404s in the first place.
+ */
+describe('1.30.12 translation slimming must not disturb the throw contract', () => {
+  test('REGRESSION: a query error still THROWS — slimming never converts a rejection into a value', async () => {
+    mode = 'error';
+    await assert.rejects(() => fetchPageByPath('services/startup-consulting', true), PageFetchError);
+    await assert.rejects(() => fetchPageByPathForMetadata('services/startup-consulting', true), PageFetchError);
+  });
+
+  test('REGRESSION: the retry is still a genuine second read THROUGH the slim wrapper', async () => {
+    // If slimming had been wrapped around the retry (or replaced it), this drops back to 1 read.
+    blipTables = new Set(['pages']);
+    const result = await fetchPageByPath('services/startup-consulting', true);
+    assert.equal(result, null);
+    assert.equal(readsByTable['pages'], 2, 'slimming displaced the retry — the second read is gone');
+  });
+
+  test('a genuine 404 still slims to exactly null, never to an empty object', async () => {
+    // `withSlimTranslations(null)` must return `null`. An `{}` here would be cached as a
+    // truthy "page" and render an empty document instead of the 404 shell.
+    const result = await fetchPageByPath('no/such/page', true);
+    assert.equal(result, null);
+    const meta = await fetchPageByPathForMetadata('no/such/page', true);
+    assert.equal(meta, null);
+  });
+
+  test('a transient failure still leaves the route cache EMPTY', async () => {
+    const route = cachingRoute();
+    failTables = new Set(['pages']);
+    await assert.rejects(() => route.get('/services/startup-consulting', () => fetchPageByPath('services/startup-consulting', true)));
+    assert.equal(route.store.size, 0, 'a slimmed failure was written into the cache — audit #10 all over again');
+  });
+});
