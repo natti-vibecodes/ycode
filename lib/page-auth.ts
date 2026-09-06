@@ -1,7 +1,7 @@
 import type { Page, PageFolder } from '@/types';
 import { createHmac, randomUUID } from 'crypto';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
-import { PageFetchError } from '@/lib/page-fetch-error';
+import { PageFetchError, fetchWithOneRetry } from '@/lib/page-fetch-error';
 
 /**
  * Page Password Protection Utilities
@@ -211,6 +211,12 @@ export function getPasswordProtection(
  * @returns Array of page folders
  */
 export async function fetchFoldersForAuth(isPublished: boolean): Promise<PageFolder[]> {
+  // Retry lives here, not at the call sites: see the note on `fetchPageByPath`. Every caller
+  // (routes, preview, static export) gets the same one genuine second read.
+  return fetchWithOneRetry(() => fetchFoldersForAuthInternal(isPublished));
+}
+
+async function fetchFoldersForAuthInternal(isPublished: boolean): Promise<PageFolder[]> {
   const supabase = await getSupabaseAdmin();
   // Never return [] on a backend failure: the caller caches this result until the next publish,
   // and an empty folder list silently disables folder-level password protection sitewide.

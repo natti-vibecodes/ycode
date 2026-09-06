@@ -1,7 +1,7 @@
 import { cache } from 'react';
 import { escapeHtml } from '@/lib/escape-html';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
-import { PageFetchError, asPageFetchError } from '@/lib/page-fetch-error';
+import { PageFetchError, asPageFetchError, fetchWithOneRetry } from '@/lib/page-fetch-error';
 import { getKnexClient } from '@/lib/knex-client';
 import { buildSlugPath, buildDynamicPageUrl, buildLocalizedDynamicPageUrl, detectLocaleFromPath, matchPageWithTranslatedSlugs, matchDynamicPageWithTranslatedSlugs } from '@/lib/page-utils';
 import { getItemWithValues, getItemsWithValues, getItemsWithValuesByIds, getItemIdsByFieldValue, getItemsByCollectionId, getSlugsByItemIds } from '@/lib/repositories/collectionItemRepository';
@@ -414,8 +414,10 @@ async function getCollectionItemBySlug(
   try {
     const supabase = await getSupabaseAdmin(tenantId);
 
+    // Infrastructure failure, NOT "no item with this slug". A null here makes the caller
+    // `continue` past the dynamic page, and the route caches the resulting 404 forever.
     if (!supabase) {
-      return null;
+      throw new PageFetchError('Supabase not configured');
     }
 
     // If locale and translations are provided, try to find item by translated slug first
@@ -447,7 +449,16 @@ async function getCollectionItemBySlug(
             if (isPublished) itemQuery = itemQuery.eq('is_publishable', true);
             const { data: item, error: itemError } = await itemQuery.single();
 
-            if (!itemError && item) {
+            // PGRST116 = this translated slug's item is not in this collection: an ANSWER, so
+            // keep scanning. Any other error is a backend failure and must not be swallowed.
+            if (itemError && itemError.code !== 'PGRST116') {
+              throw new PageFetchError(
+                `Failed to verify translated collection item ${itemId}: ${itemError.message ?? String(itemError)}`,
+                itemError
+              );
+            }
+
+            if (item) {
               // Found the item via translation - return it with all values
               return await getItemWithValues(item.id, isPublished);
             }
@@ -467,7 +478,16 @@ async function getCollectionItemBySlug(
       .limit(1)
       .single();
 
-    if (valueError || !valueData) {
+    // PGRST116 = no row carries this slug value: a genuine 404 for this dynamic page, and it
+    // stays cacheable. Every other error is a backend failure — throw so nothing is cached.
+    if (valueError && valueError.code !== 'PGRST116') {
+      throw new PageFetchError(
+        `Failed to look up collection item by slug "${slugValue}": ${valueError.message ?? String(valueError)}`,
+        valueError
+      );
+    }
+
+    if (!valueData) {
       return null;
     }
 
@@ -483,15 +503,26 @@ async function getCollectionItemBySlug(
     if (isPublished) itemQuery = itemQuery.eq('is_publishable', true);
     const { data: item, error: itemError } = await itemQuery.single();
 
-    if (itemError || !item) {
+    // PGRST116 = the slug exists but the item is not in this collection (or is unpublished):
+    // an answer. Anything else is a failure.
+    if (itemError && itemError.code !== 'PGRST116') {
+      throw new PageFetchError(
+        `Failed to fetch collection item ${valueData.item_id}: ${itemError.message ?? String(itemError)}`,
+        itemError
+      );
+    }
+
+    if (!item) {
       return null;
     }
 
     // Fetch the item with all its values
     return await getItemWithValues(item.id, isPublished);
   } catch (error) {
-    console.error('Failed to fetch collection item by slug:', error);
-    return null;
+    // Rethrow — see lib/page-fetch-error.ts. A null here is indistinguishable from "no such
+    // slug", and the dynamic page's 404 would be cached until the next publish.
+    // (The caller logs; re-logging here would double every retry's output.)
+    throw asPageFetchError(`Failed to fetch collection item by slug "${slugValue}"`, error);
   }
 }
 
@@ -575,7 +606,10 @@ async function fetchPageByPathInternal(
     // try to fetch the homepage
     if (targetPath === '' && detectedLocale) {
       // Pass preloaded components and translations so CMS content is translated
-      const homepageData = await fetchHomepage(isPublished, paginationContext, components, tenantId, translations);
+      // The un-memoised internal on purpose: this call already runs inside `fetchPageByPath`'s
+      // own retry, and nesting `fetchHomepage`'s retry inside it would turn one outage into
+      // four database reads.
+      const homepageData = await fetchHomepageInternal(isPublished, paginationContext, components, tenantId, translations);
       if (homepageData) {
         // Components and collection layers are already resolved by fetchHomepage
         // Apply translations for the detected locale
@@ -924,13 +958,24 @@ async function fetchPageByPathInternal(
   }
 }
 
+/**
+ * The one retry lives INSIDE the `cache()` boundary, never outside it.
+ *
+ * React's `cache()` memoises the returned PROMISE for the duration of a request — including a
+ * rejected one. A `fetchWithOneRetry(() => fetchPageByPath(...))` at the route therefore awaited
+ * the *same* rejected promise twice and performed exactly one database read: the retry existed
+ * on paper only. Wrapping the un-memoised `fetchPageByPathInternal` instead makes the second
+ * attempt a genuine second read, and every caller (routes, preview, static export) inherits it.
+ */
 export const fetchPageByPath = cache(async function fetchPageByPath(
   slugPath: string,
   isPublished: boolean,
   paginationContext?: PaginationContext,
   tenantId?: string,
 ): Promise<PageData | null> {
-  return fetchPageByPathInternal(slugPath, isPublished, paginationContext, tenantId, { resolveLayers: true });
+  return fetchWithOneRetry(() =>
+    fetchPageByPathInternal(slugPath, isPublished, paginationContext, tenantId, { resolveLayers: true })
+  );
 });
 
 export async function fetchPageByPathForMetadata(
@@ -939,7 +984,9 @@ export async function fetchPageByPathForMetadata(
   paginationContext?: PaginationContext,
   tenantId?: string,
 ): Promise<PageData | null> {
-  return fetchPageByPathInternal(slugPath, isPublished, paginationContext, tenantId, { resolveLayers: false });
+  return fetchWithOneRetry(() =>
+    fetchPageByPathInternal(slugPath, isPublished, paginationContext, tenantId, { resolveLayers: false })
+  );
 }
 
 /**
@@ -947,6 +994,14 @@ export async function fetchPageByPathForMetadata(
  * Works for both draft and published pages
  */
 export async function fetchErrorPage(
+  errorCode: number,
+  isPublished: boolean,
+  tenantId?: string
+): Promise<PageData | null> {
+  return fetchWithOneRetry(() => fetchErrorPageInternal(errorCode, isPublished, tenantId));
+}
+
+async function fetchErrorPageInternal(
   errorCode: number,
   isPublished: boolean,
   tenantId?: string
@@ -1047,9 +1102,14 @@ export async function fetchErrorPage(
   }
 }
 
+type HomepageData = Pick<PageData, 'page' | 'pageLayers' | 'components' | 'locale' | 'availableLocales' | 'translations' | 'generatedCss'>;
+
 /**
  * Fetch homepage (index page at root level)
  * Works for both draft and published pages
+ *
+ * The retry sits inside the `cache()` boundary — see the note on `fetchPageByPath`.
+ *
  * @param isPublished - Whether to fetch published or draft version
  * @param paginationContext - Optional pagination context with page numbers from URL
  * @param preloadedComponents - Optional pre-fetched components to avoid redundant queries
@@ -1060,7 +1120,19 @@ export const fetchHomepage = cache(async function fetchHomepage(
   preloadedComponents?: Component[],
   tenantId?: string,
   translations?: Record<string, Translation>
-): Promise<Pick<PageData, 'page' | 'pageLayers' | 'components' | 'locale' | 'availableLocales' | 'translations' | 'generatedCss'> | null> {
+): Promise<HomepageData | null> {
+  return fetchWithOneRetry(() =>
+    fetchHomepageInternal(isPublished, paginationContext, preloadedComponents, tenantId, translations)
+  );
+});
+
+async function fetchHomepageInternal(
+  isPublished: boolean,
+  paginationContext?: PaginationContext,
+  preloadedComponents?: Component[],
+  tenantId?: string,
+  translations?: Record<string, Translation>
+): Promise<HomepageData | null> {
   try {
     const supabase = await getSupabaseAdmin(tenantId);
 
@@ -1151,7 +1223,7 @@ export const fetchHomepage = cache(async function fetchHomepage(
     // Rethrow — see PageFetchError. A `null` here is cached as a permanent homepage 404.
     throw asPageFetchError('Failed to fetch homepage', error);
   }
-});
+}
 
 /**
  * Fetch all components from the database

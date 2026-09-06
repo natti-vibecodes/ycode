@@ -34,6 +34,12 @@ let mode: 'ok' | 'error' | 'no-client' = 'ok';
 let tables: Record<string, unknown[]> = {};
 /** How many times the fetcher reached the database. */
 let queryCount = 0;
+/** Reads per table — a "it retried" claim is only worth what the round-trip count says. */
+let readsByTable: Record<string, number> = {};
+/** Tables that fail on EVERY read, while the rest of the lookup succeeds. */
+let failTables = new Set<string>();
+/** Tables that fail on their FIRST read only — a transient blip a retry should absorb. */
+let blipTables = new Set<string>();
 
 const QUERY_ERROR = { message: 'connection reset by peer', code: '08006' };
 
@@ -48,7 +54,12 @@ function makeQueryBuilder(table: string) {
   }
   const settle = () => {
     queryCount++;
+    readsByTable[table] = (readsByTable[table] ?? 0) + 1;
     if (mode === 'error') return { data: null, error: QUERY_ERROR };
+    if (failTables.has(table)) return { data: null, error: QUERY_ERROR };
+    // A blip: the first read of this table fails, the next one succeeds. Only a genuine
+    // SECOND read can get past it.
+    if (blipTables.has(table) && readsByTable[table] === 1) return { data: null, error: QUERY_ERROR };
     return { data: tables[table] ?? [], error: null };
   };
   builder.single = async () => {
@@ -95,8 +106,33 @@ function cachingRoute() {
 beforeEach(() => {
   mode = 'ok';
   queryCount = 0;
+  readsByTable = {};
+  failTables = new Set();
+  blipTables = new Set();
   tables = { locales: [], pages: [], page_folders: [], components: [], page_layers: [] };
 });
+
+/**
+ * A dynamic CMS page (`/insights/{slug}`) plus the folder it lives in — the shape that reaches
+ * `getCollectionItemBySlug`. Every article on a dynamic page resolves through this path.
+ */
+function installDynamicCollectionPage() {
+  tables = {
+    ...tables,
+    page_folders: [{ id: 'folder-insights', slug: 'insights', page_folder_id: null }],
+    pages: [{
+      id: 'page-article',
+      is_dynamic: true,
+      is_index: false,
+      slug: null,
+      page_folder_id: 'folder-insights',
+      settings: { cms: { collection_id: 'collection-articles', slug_field_id: 'field-slug' } },
+    }],
+    collection_fields: [],
+    collection_item_values: [],
+    collection_items: [],
+  };
+}
 
 describe('audit #10 — backend failure vs genuine absence', () => {
   test('REGRESSION: a query error THROWS instead of returning null', async () => {
@@ -183,6 +219,105 @@ describe('audit #10 — what the cache ends up holding', () => {
     assert.equal(first, null);
     assert.equal(route.store.size, 1);
     assert.ok(route.store.has('core-/no-such-page'));
+  });
+});
+
+describe('audit #10 — dynamic collection pages (Codex round 2)', () => {
+  test('REGRESSION: a database error resolving the item slug THROWS instead of returning null', async () => {
+    // getCollectionItemBySlug used to `return null` on a query error AND swallow every
+    // exception in a catch. The caller reads that null as "this slug is not in this
+    // collection", `continue`s past the dynamic page, and the route caches a permanent 404 —
+    // the whole /insights/* space would go dark on one Supabase blip.
+    installDynamicCollectionPage();
+    failTables = new Set(['collection_item_values']);
+
+    await assert.rejects(
+      () => fetchPageByPath('insights/how-we-work', true),
+      (err: unknown) => {
+        assert.ok(err instanceof PageFetchError, `expected PageFetchError, got ${String(err)}`);
+        return true;
+      },
+    );
+    // Population check: the dynamic path really was entered — a rejection from an earlier
+    // query would prove nothing about getCollectionItemBySlug.
+    assert.ok(
+      (readsByTable['collection_item_values'] ?? 0) > 0,
+      'the slug lookup never ran; this test would pass vacuously',
+    );
+  });
+
+  test('REGRESSION: an error verifying the item row THROWS (the second query in the same path)', async () => {
+    installDynamicCollectionPage();
+    tables = { ...tables, collection_item_values: [{ item_id: 'item-1' }] };
+    failTables = new Set(['collection_items']);
+
+    await assert.rejects(() => fetchPageByPath('insights/how-we-work', true), PageFetchError);
+    assert.ok((readsByTable['collection_items'] ?? 0) > 0, 'the item verification never ran');
+  });
+
+  test('a slug that genuinely has no item still returns null — dynamic 404s stay cacheable', async () => {
+    installDynamicCollectionPage();
+    const result = await fetchPageByPath('insights/never-existed', true);
+    assert.equal(result, null);
+    assert.ok(
+      (readsByTable['collection_item_values'] ?? 0) > 0,
+      'a zero-query null proves nothing; the lookup must have actually run',
+    );
+  });
+});
+
+describe('audit #10 — the retry must be a genuine SECOND read (Codex round 2)', () => {
+  test('REGRESSION: fetchPageByPath absorbs a one-shot failure by reading again', async () => {
+    // The retry used to sit OUTSIDE `fetchPageByPath`, which React `cache()`s. The second
+    // await returned the memoised REJECTED promise, so the "retry" performed zero reads and
+    // the blip propagated. The fix moves it inside the cache boundary.
+    blipTables = new Set(['pages']);
+
+    const result = await fetchPageByPath('services/startup-consulting', true);
+
+    assert.equal(result, null, 'the second read succeeded and found no such page');
+    assert.equal(
+      readsByTable['pages'], 2,
+      'the retry must hit the database a SECOND time, not re-await a memoised rejection',
+    );
+  });
+
+  test('REGRESSION: fetchHomepage absorbs a one-shot failure by reading again', async () => {
+    blipTables = new Set(['locales']);
+
+    const result = await fetchHomepage(true);
+
+    assert.equal(result, null);
+    assert.equal(readsByTable['locales'], 2, 'the homepage retry must be a real second read');
+  });
+
+  test('two consecutive failures still reject — the retry must not paper over an outage', async () => {
+    mode = 'error';
+    await assert.rejects(() => fetchPageByPath('services/startup-consulting', true), PageFetchError);
+    assert.ok(queryCount >= 2, 'both attempts should have reached the database');
+  });
+
+  test('THE MECHANISM: retrying OUTSIDE a memoising wrapper performs one read; inside, two', async () => {
+    // Models React `cache()`: one promise per argument list for the life of the request,
+    // stored whether it resolves or rejects. This is why the retry had to move.
+    function memoize<T>(fn: () => Promise<T>): () => Promise<T> {
+      let promise: Promise<T> | undefined;
+      return () => (promise ??= fn());
+    }
+
+    let outsideReads = 0;
+    const memoizedFetcher = memoize(async () => { outsideReads++; throw new PageFetchError('blip'); });
+    await assert.rejects(() => fetchWithOneRetry(memoizedFetcher, 0));
+    assert.equal(outsideReads, 1, 'the old shape: the "retry" re-awaited a cached rejection');
+
+    let insideReads = 0;
+    const fetcherWithRetry = memoize(() => fetchWithOneRetry(async () => {
+      insideReads++;
+      if (insideReads === 1) throw new PageFetchError('blip');
+      return 'ok';
+    }, 0));
+    assert.equal(await fetcherWithRetry(), 'ok');
+    assert.equal(insideReads, 2, 'the shipped shape: the retry is a real second read');
   });
 });
 

@@ -35,6 +35,12 @@ export function asPageFetchError(context: string, error: unknown): PageFetchErro
  * A single Supabase blip is the common case and it should cost the visitor a few hundred
  * milliseconds, not a 500 — and never a cached 404. If the retry fails too, the error is
  * rethrown so `unstable_cache` stores nothing and the next request tries again.
+ *
+ * 🔴 `fn` MUST NOT be memoised. React's `cache()` stores the returned promise for the whole
+ * request, rejections included, so `fetchWithOneRetry(() => aCachedFetcher(...))` awaits the
+ * SAME rejected promise twice and performs exactly one database read — a retry that exists on
+ * paper only. Wrap the un-memoised function (see `fetchPageByPath` / `fetchHomepage`, which
+ * call this INSIDE their `cache()` boundary, around the `…Internal` implementation).
  */
 export async function fetchWithOneRetry<T>(fn: () => Promise<T>, delayMs = 150): Promise<T> {
   try {
