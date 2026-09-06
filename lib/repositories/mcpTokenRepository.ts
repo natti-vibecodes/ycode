@@ -1,6 +1,7 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { createHash, randomBytes } from 'crypto';
-import { invalidateToken } from '@/lib/mcp/token-cache';
+import { invalidateTokenHash } from '@/lib/mcp/token-cache';
+import { hashMcpToken } from '@/lib/mcp/token-hash';
 
 export interface McpToken {
   id: string;
@@ -87,19 +88,21 @@ export async function createToken(name: string): Promise<McpTokenWithPlainToken>
     .from('mcp_tokens')
     .insert({
       name,
-      token,
+      token_hash: hashMcpToken(token),
       token_prefix: tokenPrefix,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
-    .select('id, name, token, token_prefix, is_active, last_used_at, created_at, updated_at, oauth_client_id, expires_at, user_id')
+    .select('id, name, token_prefix, is_active, last_used_at, created_at, updated_at, oauth_client_id, expires_at, user_id')
     .single();
 
   if (error) {
     throw new Error(`Failed to create MCP token: ${error.message}`);
   }
 
-  return data;
+  // The plaintext is returned to the caller exactly once, here, and is never
+  // written to the database (security-plan 2026-09-06, #3).
+  return { ...data, token };
 }
 
 /**
@@ -116,7 +119,7 @@ export async function validateToken(token: string): Promise<McpToken | null> {
   const { data, error } = await client
     .from('mcp_tokens')
     .select('id, name, token_prefix, is_active, last_used_at, created_at, updated_at, oauth_client_id, expires_at, user_id, scopes')
-    .eq('token', token)
+    .eq('token_hash', hashMcpToken(token))
     .eq('is_active', true)
     .single();
 
@@ -145,7 +148,7 @@ export async function deleteToken(id: string): Promise<void> {
 
   const { data: existing } = await client
     .from('mcp_tokens')
-    .select('token')
+    .select('token_hash')
     .eq('id', id)
     .single();
 
@@ -158,8 +161,8 @@ export async function deleteToken(id: string): Promise<void> {
     throw new Error(`Failed to delete MCP token: ${error.message}`);
   }
 
-  if (existing?.token) {
-    invalidateToken(existing.token);
+  if (existing?.token_hash) {
+    invalidateTokenHash(existing.token_hash);
   }
 }
 
@@ -210,7 +213,7 @@ export async function createOAuthToken(
     .from('mcp_tokens')
     .insert({
       name: data.name,
-      token,
+      token_hash: hashMcpToken(token),
       token_prefix: tokenPrefix,
       oauth_client_id: data.oauth_client_id,
       user_id: data.user_id,
@@ -250,7 +253,7 @@ export async function rotateRefreshToken(
 
   const { data: existing, error: fetchError } = await client
     .from('mcp_tokens')
-    .select('id, name, token, oauth_client_id, user_id, refresh_expires_at, is_active')
+    .select('id, name, token_hash, oauth_client_id, user_id, refresh_expires_at, is_active')
     .eq('refresh_token_hash', hashRefreshToken(refreshToken))
     .eq('is_active', true)
     .single();
@@ -270,8 +273,8 @@ export async function rotateRefreshToken(
 
   // Revoke the old token first so a leaked refresh token can't be reused.
   await client.from('mcp_tokens').delete().eq('id', existing.id);
-  if (existing.token) {
-    invalidateToken(existing.token);
+  if (existing.token_hash) {
+    invalidateTokenHash(existing.token_hash);
   }
 
   return createOAuthToken({

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/lib/supabase-auth';
 import { getClient } from '@/lib/repositories/mcpOAuthClientRepository';
 import { createCode } from '@/lib/repositories/mcpOAuthCodeRepository';
+import { isAllowedRedirectUri } from '@/lib/oauth-redirect-uri';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -101,6 +102,17 @@ export async function POST(request: NextRequest) {
   if (!client.redirect_uris.includes(redirectUri)) {
     return NextResponse.json(
       { error: 'invalid_request', error_description: 'redirect_uri not registered' },
+      { status: 400 },
+    );
+  }
+
+  // Re-validate at REDIRECT time, not only at registration. Rows already in
+  // `mcp_oauth_clients` were written under the old check, and the value this
+  // route returns is assigned to `window.location.href` by ConsentForm — so a
+  // stored `javascript:` URI would execute (security plan C2).
+  if (!isAllowedRedirectUri(redirectUri)) {
+    return NextResponse.json(
+      { error: 'invalid_request', error_description: 'redirect_uri scheme not allowed' },
       { status: 400 },
     );
   }
