@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { getAuthUser } from '@/lib/supabase-auth';
 import { getClient } from '@/lib/repositories/mcpOAuthClientRepository';
 import ConsentForm from './ConsentForm';
+import { isAllowedRedirectUri } from '@/lib/oauth-redirect-uri';
 
 /**
  * OAuth Consent Page
@@ -127,6 +128,17 @@ export default async function AuthorizePage({
       <ErrorPanel
         title="Invalid redirect URI"
         message="The redirect URI does not match any registered for this client."
+      />
+    );
+  }
+
+  // Same positive allowlist as registration and /api/oauth/authorize: a row
+  // stored under the old check must not reach a consent screen (plan C2).
+  if (!isAllowedRedirectUri(redirectUri)) {
+    return (
+      <ErrorPanel
+        title="Invalid redirect URI"
+        message="The redirect URI uses a scheme this instance does not allow."
       />
     );
   }

@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { registerClient } from '@/lib/repositories/mcpOAuthClientRepository';
+import { isAllowedRedirectUri } from '@/lib/oauth-redirect-uri';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -61,20 +62,17 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Positive allowlist — https anywhere, or http on a loopback host. Every
+  // other scheme is refused, `javascript:` and `data:` included. The previous
+  // check rejected only when a URI was BOTH non-HTTPS AND non-loopback, so
+  // `javascript://localhost/x` registered cleanly (security plan C2).
   for (const uri of redirectUris) {
-    try {
-      const parsed = new URL(uri);
-      if (parsed.protocol !== 'https:'
-        && parsed.hostname !== 'localhost'
-        && parsed.hostname !== '127.0.0.1') {
-        return jsonError(
-          400,
-          'invalid_redirect_uri',
-          `redirect_uri must use HTTPS (or be localhost): ${uri}`,
-        );
-      }
-    } catch {
-      return jsonError(400, 'invalid_redirect_uri', `Malformed redirect_uri: ${uri}`);
+    if (!isAllowedRedirectUri(uri)) {
+      return jsonError(
+        400,
+        'invalid_redirect_uri',
+        `redirect_uri must be https, or http on a loopback host: ${uri}`,
+      );
     }
   }
 
