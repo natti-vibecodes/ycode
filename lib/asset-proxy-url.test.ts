@@ -73,3 +73,44 @@ describe('upload_asset returns the proxy path (source guard)', () => {
       'assets.ts must not build an /a/ path itself');
   });
 });
+
+describe('site-code extensions (SCA-1469)', () => {
+  /**
+   * Chrome — site.css, site.js, cookie.*, lenis, gsap — is referenced through /a/ on every
+   * page of the site once security item #1 lands, so these two extensions are the most-read
+   * URLs the fork emits.
+   *
+   * `mimeToExtension`'s fallback takes the MIME subtype verbatim, which made `text/javascript`
+   * canonicalise to `site.javascript`. Nothing was broken by it (the route serves the honest
+   * `text/javascript` from the stored value, and a hand-written `.js` 301s to it) — but the
+   * 301 is a wasted round trip on a guess anyone would make.
+   *
+   * Changing a canonical path is only safe because the route redirects non-canonical names:
+   * measured before the change, zero stored references anywhere used `.javascript`
+   * (`custom_code_head`/`custom_code_body` both 0; the site repo's tracked /a/ URLs are webp,
+   * woff2 and mp4 only), and any that appeared later would 301 rather than 404.
+   */
+  test('a JS asset canonicalises to .js, not .javascript', () => {
+    assert.equal(
+      getAssetProxyUrl(asset({ mime_type: 'text/javascript' })),
+      getAssetProxyUrl(asset({ mime_type: 'application/javascript' })),
+      'both JS spellings must land on one canonical path',
+    );
+    assert.match(getAssetProxyUrl(asset({ mime_type: 'text/javascript' }))!, /\/site\.js$/);
+  });
+
+  test('a CSS asset stays .css', () => {
+    // This one already worked through the fallback; the guard is against a future map edit
+    // silently moving it, which would 301 every stylesheet on the site.
+    assert.match(
+      getAssetProxyUrl(asset({ mime_type: 'text/css', storage_path: 'website/x.css' }))!,
+      /\/site\.css$/,
+    );
+  });
+
+  test('fonts and images are untouched by the site-code entries', () => {
+    assert.match(getAssetProxyUrl(asset({ mime_type: 'font/woff2' }))!, /\.woff2$/);
+    assert.match(getAssetProxyUrl(asset({ mime_type: 'image/webp' }))!, /\.webp$/);
+    assert.match(getAssetProxyUrl(asset({ mime_type: 'video/mp4' }))!, /\.mp4$/);
+  });
+});
