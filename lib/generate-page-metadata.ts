@@ -22,6 +22,7 @@ import { generateColorVariablesCss } from '@/lib/repositories/colorVariableRepos
 import { buildPageHreflangAlternates, type HreflangAlternate } from '@/lib/hreflang-utils';
 import { getTranslatableKey, getTranslatedAssetId, getTranslatedText } from '@/lib/locale-runtime';
 import { buildAbsolutePageUrl, getSiteBaseUrl } from '@/lib/url-utils';
+import { classifyDefaultOgImage, pickSocialImageUrl, twitterCardFor } from '@/lib/default-og-image';
 
 /**
  * Global page render settings fetched once per page render
@@ -39,6 +40,8 @@ export interface GlobalPageSettings {
   faviconMimeType?: string | null;
   webClipUrl?: string | null;
   webClipMimeType?: string | null;
+  /** Site-level default og:image / twitter:image for pages with no SEO image (SCA-1111). */
+  defaultOgImageUrl?: string | null;
 }
 
 /** @deprecated Use GlobalPageSettings instead */
@@ -94,6 +97,7 @@ async function fetchGlobalPageSettingsImpl(isPreview = false): Promise<GlobalPag
     'ycode_badge',
     'favicon_asset_id',
     'web_clip_asset_id',
+    'default_og_image',
   ]);
 
   // Fetch favicon and web clip asset URLs if IDs are set
@@ -128,6 +132,21 @@ async function fetchGlobalPageSettingsImpl(isPreview = false): Promise<GlobalPag
     }
   }
 
+  // Site-level default social image. Accepts an asset ID (resolved through the
+  // asset proxy, exactly like a per-page SEO image) or a literal URL.
+  let defaultOgImageUrl: string | null = null;
+  const defaultOgImage = classifyDefaultOgImage(settings.default_og_image);
+  if (defaultOgImage?.kind === 'url') {
+    defaultOgImageUrl = defaultOgImage.url;
+  } else if (defaultOgImage?.kind === 'asset') {
+    try {
+      const asset = await getAssetById(defaultOgImage.assetId, isAssetPublished);
+      if (asset) defaultOgImageUrl = getAssetProxyUrl(asset) || asset.public_url || null;
+    } catch {
+      // Ignore errors fetching the default OG image
+    }
+  }
+
   const colorVariablesCss = await generateColorVariablesCss();
 
   return {
@@ -143,6 +162,7 @@ async function fetchGlobalPageSettingsImpl(isPreview = false): Promise<GlobalPag
     faviconMimeType,
     webClipUrl,
     webClipMimeType,
+    defaultOgImageUrl,
   };
 }
 
@@ -369,12 +389,12 @@ export async function generatePageMetadata(
       : seo?.image;
 
     // Resolve image URL (handles both Asset ID string and FieldVariable)
-    let imageUrl = seoImage ? await resolveImageUrl(seoImage, collectionItem) : null;
+    const pageImageUrl = seoImage ? await resolveImageUrl(seoImage, collectionItem) : null;
 
-    // Make relative URLs absolute — social crawlers require absolute og:image URLs
-    if (imageUrl && imageUrl.startsWith('/') && siteBaseUrl) {
-      imageUrl = `${siteBaseUrl}${imageUrl}`;
-    }
+    // Pages that set their own SEO image keep it; the rest fall back to the
+    // site-level default (SCA-1111). Relative URLs are made absolute here —
+    // social crawlers require an absolute og:image.
+    const imageUrl = pickSocialImageUrl(pageImageUrl, seoSettings.defaultOgImageUrl, siteBaseUrl);
 
     if (imageUrl || pageUrl !== undefined) {
       metadata.openGraph = {
@@ -394,7 +414,7 @@ export async function generatePageMetadata(
           : {}),
       };
       metadata.twitter = {
-        card: imageUrl ? 'summary_large_image' : 'summary',
+        card: twitterCardFor(imageUrl),
         title,
         description,
         ...(imageUrl ? { images: [imageUrl] } : {}),
