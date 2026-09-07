@@ -107,6 +107,18 @@ export interface ProjectManifest {
     assets?: number;
   };
   lastMigration?: string;
+  /**
+   * False when the export carries asset ROWS but not asset BYTES (the automated backup).
+   * Absent means the builder's default: bytes included. Recorded in the archive so a restore
+   * never has to infer from a missing `files` array whether the binaries were skipped or the
+   * downloads failed.
+   */
+  assetFilesIncluded?: boolean;
+  /** What an automated backup stripped before serialization — names only, never values. */
+  redactions?: {
+    tables: string[];
+    settingKeys: string[];
+  };
 }
 
 export interface ExportFile {
@@ -734,7 +746,22 @@ export async function restoreAssetFiles(
 // ─── Export ──────────────────────────────────────────────────────────
 
 /** Export the project as portable JSON data. */
-export async function exportProject(): Promise<ProjectExportResult> {
+export interface ExportProjectOptions {
+  /**
+   * Download every asset's bytes and embed them as base64 (default `true`, the builder's
+   * behaviour). Set `false` for an automated backup: the asset ROWS still travel — storage
+   * path, name, dimensions, folder — so the manifest of what exists is preserved, but the
+   * binaries are not re-downloaded and re-committed nightly. Restoring images from such a
+   * backup reads them from the storage bucket the rows point at.
+   */
+  includeAssetFiles?: boolean;
+}
+
+export async function exportProject(
+  options: ExportProjectOptions = {},
+): Promise<ProjectExportResult> {
+  const { includeAssetFiles = true } = options;
+
   const canConnect = await testKnexConnection();
   if (!canConnect) {
     return {
@@ -773,7 +800,7 @@ export async function exportProject(): Promise<ProjectExportResult> {
     }
 
     const assetRows = data['assets'] || [];
-    const files = await collectAssetFiles(assetRows);
+    const files = includeAssetFiles ? await collectAssetFiles(assetRows) : [];
 
     if (assetRows.length > 0) {
       stats.assets = assetRows.length;
