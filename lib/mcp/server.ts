@@ -7,6 +7,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { hasScope, type McpScope } from '@/lib/mcp/scopes';
+import type { McpCaller } from '@/lib/mcp/caller';
 import { DEFERRED_GROUP_GUIDES, MCP_PUBLISHING_INSTRUCTIONS, SYSTEM_INSTRUCTIONS } from '@/lib/mcp/instructions';
 import { registerPageTools } from '@/lib/mcp/tools/pages';
 import { registerPageFolderTools } from '@/lib/mcp/tools/page-folders';
@@ -29,7 +30,7 @@ import { registerAnimationTools } from '@/lib/mcp/tools/animations';
 import { registerReferenceResources } from '@/lib/mcp/resources/reference';
 import { registerSiteResources } from '@/lib/mcp/resources/site';
 
-export function createMcpServer(scopes: McpScope[] | null = null): McpServer {
+export function createMcpServer(scopes: McpScope[] | null = null, caller?: McpCaller): McpServer {
   // NULL scopes = every scope, which is what keeps existing tokens working untouched while
   // least privilege is adopted by minting new scoped tokens (SCA-1233). Tools a token cannot
   // use are never REGISTERED, so they do not appear in tools/list either — an agent should not
@@ -59,7 +60,9 @@ export function createMcpServer(scopes: McpScope[] | null = null): McpServer {
   if (allow('styles')) registerFontTools(server);
   if (allow('locales')) registerLocaleTools(server);
   if (allow('forms')) registerFormTools(server);
-  if (allow('settings')) registerSettingsTools(server);
+  // `caller` reaches the settings tools only: they are the writers that clobbered a whole global
+  // setting with no way to name the writer afterwards (SCA-1480).
+  if (allow('settings')) registerSettingsTools(server, caller);
   if (allow('publishing')) registerPublishingTools(server);
   if (allow('animations')) registerAnimationTools(server);
 

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isConflictError } from '@/lib/errors/conflict';
 import {
   getComponentById,
   updateComponent,
@@ -44,7 +45,7 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { name, layers, variables, variants } = body;
+    const { name, layers, variables, variants, base_content_hash: baseContentHash } = body;
 
     const updates: any = {};
     if (name !== undefined) updates.name = name;
@@ -52,10 +53,28 @@ export async function PUT(
     if (variables !== undefined) updates.variables = variables;
     if (variants !== undefined) updates.variants = variants;
 
-    const component = await updateComponent(id, updates);
+    // The builder sends the `content_hash` it loaded the component at. Without it this PUT is a
+    // blind whole-tree replace that silently erases anything MCP (or another tab) wrote since —
+    // that is how the third form's honeypot was lost (SCA-1476). Absent hash = old behaviour.
+    const component = await updateComponent(id, updates, { baseContentHash });
 
     return NextResponse.json({ data: component });
   } catch (error) {
+    if (isConflictError(error)) {
+      // 409, not 500: the write was REFUSED and the stored tree is intact. The body carries the
+      // current component so the client can reload it instead of retrying its stale payload.
+      return NextResponse.json(
+        {
+          error:
+            'This component changed since you opened it — reload to see the latest.',
+          code: 'conflict',
+          key: error.key,
+          expected_content_hash: error.expected,
+          current: error.current,
+        },
+        { status: 409 }
+      );
+    }
     console.error('Error updating component:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to update component';
     return NextResponse.json(

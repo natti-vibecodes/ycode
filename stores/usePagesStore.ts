@@ -45,6 +45,12 @@ interface PagesState {
   draftsByPageId: Record<string, PageLayers>;
   isLoading: boolean;
   error: string | null;
+  /**
+   * Set to the page id whose draft save was REFUSED because another writer changed the tree
+   * first (SCA-1476). The builder shows a reload prompt; nothing is retried, because retrying
+   * the same stale tree is the overwrite the 409 just prevented.
+   */
+  pageConflictId: string | null;
 }
 
 interface PagesActions {
@@ -254,6 +260,7 @@ export const usePagesStore = create<PagesStore>((set, get) => ({
   draftsByPageId: {},
   isLoading: false,
   error: null,
+  pageConflictId: null,
 
   setPages: (pages) => set({ pages }),
   setFolders: (folders) => set({ folders }),
@@ -472,8 +479,31 @@ export const usePagesStore = create<PagesStore>((set, get) => ({
     try {
       const response = await pageLayersApi.updateDraft(
         pageId,
-        draft.layers
+        draft.layers,
+        // The version this draft carries. Undefined only before the first server round-trip, in
+        // which case the server keeps the old unconditional behaviour.
+        draft.content_hash ?? undefined,
       );
+
+      if (response.conflict) {
+        // REFUSED, not failed: an MCP lane (or another tab) wrote this page's tree since the
+        // browser loaded it. Saving anyway would replay the stale tree over their work — the
+        // page-layers twin of the component clobber in SCA-1476. Keep her local edits, adopt the
+        // server row as the new base for display, and tell her to reload.
+        const current = response.conflict.current as PageLayers | undefined;
+        set((state) => ({
+          error: 'This page changed since you opened it — reload to see the latest.',
+          pageConflictId: pageId,
+          isLoading: false,
+          draftsByPageId: current
+            ? {
+              ...state.draftsByPageId,
+              [pageId]: { ...current, layers: state.draftsByPageId[pageId]?.layers ?? current.layers },
+            }
+            : state.draftsByPageId,
+        }));
+        return;
+      }
 
       if (response.error) {
         set({ error: response.error, isLoading: false });
@@ -497,6 +527,9 @@ export const usePagesStore = create<PagesStore>((set, get) => ({
                 layers: currentDraft!.layers, // Keep existing layers reference
               }
             },
+            // `response.data.content_hash` becomes the base for the next save automatically,
+            // because the next save reads it back off this same draft record.
+            pageConflictId: state.pageConflictId === pageId ? null : state.pageConflictId,
             isLoading: false,
           }));
 

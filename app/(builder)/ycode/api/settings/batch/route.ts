@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { setSettings } from '@/lib/repositories/settingsRepository';
+import { isConflictError } from '@/lib/errors/conflict';
 import { isDraftOnlySettingKey } from '@/lib/settings-keys';
 import { clearAllCache, getAllPublishedRoutes, warmRoutes } from '@/lib/services/cacheService';
 
@@ -13,7 +14,7 @@ import { clearAllCache, getAllPublishedRoutes, warmRoutes } from '@/lib/services
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
-    const { settings } = body;
+    const { settings, expected_updated_at: expectedUpdatedAt } = body;
 
     if (!settings || typeof settings !== 'object') {
       return NextResponse.json(
@@ -22,7 +23,14 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const count = await setSettings(settings);
+    // This is the builder's Settings → General save. It reads the settings once at editor init
+    // and writes back whatever is in the form — including `custom_code_head`, the whole global
+    // chrome — so without a precondition it silently replays a stale head over a chrome sync
+    // (SCA-1480). Preconditions are per-key and optional; unguarded keys behave as before.
+    const { count, updatedAt } = await setSettings(settings, {
+      expectedUpdatedAt,
+      caller: 'route:PUT /ycode/api/settings/batch',
+    });
 
     // Only invalidate caches if any of the updated keys actually affect
     // public page rendering. Skips builder-only autosaves.
@@ -50,10 +58,22 @@ export async function PUT(request: NextRequest) {
     }
 
     return NextResponse.json({
-      data: { count },
+      data: { count, updated_at: updatedAt },
       message: `Updated ${count} setting(s) successfully`,
     });
   } catch (error) {
+    if (isConflictError(error)) {
+      return NextResponse.json(
+        {
+          error: error.message,
+          code: 'conflict',
+          key: error.key,
+          expected_updated_at: error.expected,
+          current: error.current,
+        },
+        { status: 409 }
+      );
+    }
     console.error('[API] Error updating settings:', error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to update settings' },

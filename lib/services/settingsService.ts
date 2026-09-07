@@ -4,7 +4,7 @@
  * Business logic for managing application settings
  */
 
-import { getSettingsByKeys, setSetting } from '@/lib/repositories/settingsRepository';
+import { getSettingsByKeys, setSetting, type SettingWriteOptions } from '@/lib/repositories/settingsRepository';
 import { isDraftOnlySettingKey } from '@/lib/settings-keys';
 import { clearAllCache, getAllPublishedRoutes, warmRoutes } from '@/lib/services/cacheService';
 import type { Setting } from '@/types';
@@ -35,7 +35,7 @@ export async function syncCSS(direction: 'publish' | 'revert' = 'publish'): Prom
     return false;
   }
 
-  await setSetting(targetKey, sourceCSS);
+  await setSetting(targetKey, sourceCSS, { caller: 'service:syncCSS' });
   return true;
 }
 
@@ -48,7 +48,7 @@ export const publishCSS = () => syncCSS('publish');
  * @returns The created/updated setting
  */
 export async function savePublishedAt(timestamp: string): Promise<Setting> {
-  return await setSetting('published_at', timestamp);
+  return await setSetting('published_at', timestamp, { caller: 'service:savePublishedAt' });
 }
 
 /**
@@ -73,13 +73,17 @@ export async function setSettingAndInvalidate(
   key: string,
   value: unknown,
   request?: Request,
-): Promise<void> {
-  await setSetting(key, value);
-  if (isDraftOnlySettingKey(key)) return;
+  options?: SettingWriteOptions,
+): Promise<Setting> {
+  // A supplied precondition makes this throw ConflictError instead of clobbering (SCA-1480).
+  // The cache work below is deliberately AFTER the write: a refused write must not purge or warm
+  // anything, or a conflict would still cost every cached route.
+  const saved = await setSetting(key, value, options);
+  if (isDraftOnlySettingKey(key)) return saved;
 
   await clearAllCache();
 
-  if (!request) return;
+  if (!request) return saved;
   try {
     const routes = await getAllPublishedRoutes();
     const warmResult = await warmRoutes(routes, request);
@@ -91,4 +95,6 @@ export async function setSettingAndInvalidate(
   } catch {
     // Non-fatal: warming is an optimisation.
   }
+
+  return saved;
 }

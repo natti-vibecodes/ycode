@@ -172,7 +172,7 @@ export async function PUT(request: NextRequest) {
     }
 
     if (Object.keys(updates).length > 0) {
-      await setSettings(updates);
+      await setSettings(updates, { caller: 'route:PUT /ycode/api/settings/agent' });
     }
 
     const config = await resolveAgentConfig(userId);

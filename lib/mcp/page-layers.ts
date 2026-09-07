@@ -81,10 +81,19 @@ export async function saveCachedLayers(pageId: string, layers: Layer[]): Promise
   const cached = cache.get(pageId);
   const existingDraft = isFresh(cached) ? cached.pageLayers : undefined;
 
+  // The cache entry IS the row this call's read-modify-write was computed from — every MCP layer
+  // tool reads through `getCachedDraft`, which refreshes the entry when the TTL lapses. So its
+  // `content_hash` is the honest base for the write, including across the 5s window in which a
+  // builder save could have landed (SCA-1476). No cached entry = a caller that did not read
+  // through this module, so the write stays unconditional as before.
+  const baseContentHash = cached?.pageLayers?.content_hash;
+
   let saved: PageLayers;
   try {
-    saved = await upsertDraftLayers(pageId, layers, undefined, existingDraft);
+    saved = await upsertDraftLayers(pageId, layers, undefined, existingDraft, { baseContentHash });
   } catch (error) {
+    // Evicting on conflict matters as much as on failure: the next read must come from the
+    // database, or the agent would retry against the same stale snapshot forever.
     cache.delete(pageId);
     throw error;
   }

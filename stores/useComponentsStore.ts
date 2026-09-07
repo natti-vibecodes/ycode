@@ -116,6 +116,21 @@ interface ComponentsState {
    * persist the whole `variants` array as one unit.
    */
   componentDraftDirty: Record<string, boolean>;
+  /**
+   * The server `content_hash` each open component draft was seeded from — the optimistic-
+   * concurrency base sent with every save (SCA-1476).
+   *
+   * `loadComponentDraft` snapshots the tree once and never re-reads, so from that moment the
+   * browser holds a copy that only ages. Sending the hash it was seeded at is what turns the
+   * whole-tree PUT from "replace with whatever I have" into "replace only if nobody else did".
+   */
+  componentBaseHash: Record<string, string | undefined>;
+  /**
+   * Set to the component id whose save was refused because another writer (MCP, another tab)
+   * changed it first. The UI shows a reload prompt; nothing is retried, because retrying is the
+   * overwrite the 409 just prevented.
+   */
+  componentConflictId: string | null;
   isSaving: boolean;
   saveTimeouts: Record<string, NodeJS.Timeout>;
 }
@@ -259,6 +274,8 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
     error: null,
     componentDrafts: {},
     componentDraftDirty: {},
+    componentBaseHash: {},
+    componentConflictId: null,
     isSaving: false,
     saveTimeouts: {},
 
@@ -291,6 +308,12 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
           ...state.componentDraftDirty,
           [component.id]: false,
         },
+        // An authoritative server snapshot is a fresh base — the draft is no longer stale.
+        componentBaseHash: {
+          ...state.componentBaseHash,
+          [component.id]: component.content_hash,
+        },
+        componentConflictId: state.componentConflictId === component.id ? null : state.componentConflictId,
       }));
     },
 
@@ -589,6 +612,14 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
             ...state.componentDraftDirty,
             [componentId]: false,
           },
+          // Snapshot the version this draft is a copy of. Every save from here is conditional on
+          // it, so a concurrent MCP write is refused rather than replayed over (SCA-1476).
+          componentBaseHash: {
+            ...state.componentBaseHash,
+            [componentId]: component.content_hash,
+          },
+          componentConflictId:
+            state.componentConflictId === componentId ? null : state.componentConflictId,
         }));
 
         // Initialize version tracking with loaded state (per variant)
@@ -694,8 +725,49 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
         const response = await fetch(`/ycode/api/components/${componentId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ variants: variantsBeingSaved }),
+          body: JSON.stringify({
+            variants: variantsBeingSaved,
+            // The version this draft was seeded from. Undefined only for a draft that predates
+            // the guard, in which case the server keeps the old unconditional behaviour.
+            base_content_hash: get().componentBaseHash[componentId],
+          }),
         });
+
+        if (response.status === 409) {
+          // REFUSED, not failed. Someone else — an MCP lane, another tab — changed this component
+          // since it was opened, and the stored tree is theirs. Retrying would replay our stale
+          // snapshot over it, which is exactly the honeypot loss in SCA-1476, so we stop, keep the
+          // local edits in memory, and tell her to reload.
+          const conflict = await response.json().catch(() => ({}));
+          console.warn('[components] save refused — component changed since it was opened', {
+            componentId,
+            expected: conflict?.expected_content_hash,
+          });
+          set({
+            isSaving: false,
+            componentConflictId: componentId,
+            error: 'This component changed since you opened it — reload to see the latest.',
+          });
+          // Re-read so the store carries the CURRENT server tree next to her unsaved draft. The
+          // draft is deliberately left alone: dropping her edits to win the merge would trade one
+          // silent data loss for another.
+          try {
+            const fresh = await fetch(`/ycode/api/components/${componentId}`);
+            const freshJson = await fresh.json();
+            if (freshJson?.data) {
+              set((state) => ({
+                components: state.components.map((c) => (c.id === componentId ? freshJson.data : c)),
+                componentBaseHash: {
+                  ...state.componentBaseHash,
+                  [componentId]: freshJson.data.content_hash,
+                },
+              }));
+            }
+          } catch {
+            // Non-fatal: the conflict is already surfaced; the reload will fetch it anyway.
+          }
+          return;
+        }
 
         const result = await response.json();
 
@@ -716,6 +788,13 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
           set((state) => ({
             components: state.components.map((c) => (c.id === componentId ? updatedComponent : c)),
             componentDraftDirty: { ...state.componentDraftDirty, [componentId]: false },
+            // Our own write is the new base — otherwise the next autosave (500ms later) would
+            // send a hash the server has already moved past and conflict with itself.
+            componentBaseHash: {
+              ...state.componentBaseHash,
+              [componentId]: updatedComponent?.content_hash,
+            },
+            componentConflictId: state.componentConflictId === componentId ? null : state.componentConflictId,
             isSaving: false,
           }));
 
@@ -738,6 +817,11 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
           // debounced save record the version.
           set((state) => ({
             components: state.components.map((c) => (c.id === componentId ? updatedComponent : c)),
+            componentBaseHash: {
+              ...state.componentBaseHash,
+              [componentId]: updatedComponent?.content_hash,
+            },
+            componentConflictId: state.componentConflictId === componentId ? null : state.componentConflictId,
             isSaving: false,
           }));
         }

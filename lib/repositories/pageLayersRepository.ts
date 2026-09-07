@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { ConflictError } from '@/lib/errors/conflict';
 import type { PageLayers, Layer } from '../../types';
 import { generatePageLayersHash } from '../hash-utils';
 import { deleteTranslationsInBulk, markTranslationsIncomplete } from '@/lib/repositories/translationRepository';
@@ -114,11 +115,23 @@ export async function getPublishedLayers(pageId: string): Promise<PageLayers | n
  *   Pass `null` to assert "no draft exists" without re-checking. Omit (or
  *   pass `undefined`) to preserve the original fetch-then-decide behavior.
  */
+export interface UpsertDraftLayersOptions {
+  /**
+   * Optimistic-concurrency precondition (SCA-1476, item 3): the `content_hash` the caller read.
+   *
+   * The page-layers save has the identical shape to the component save — the builder PUTs the
+   * whole tree it cached — so it has the identical failure mode. Omit for the old unconditional
+   * write; supply it and a tree another writer has touched is never overwritten.
+   */
+  baseContentHash?: string;
+}
+
 export async function upsertDraftLayers(
   pageId: string,
   layers: Layer[],
   additionalData?: Record<string, any>,
   existingDraft?: PageLayers | null,
+  options?: UpsertDraftLayersOptions,
 ): Promise<PageLayers> {
   const client = await getSupabaseAdmin();
 
@@ -130,6 +143,12 @@ export async function upsertDraftLayers(
   const resolvedDraft = existingDraft !== undefined
     ? existingDraft
     : await getDraftLayers(pageId);
+
+  // Fail before doing any translation bookkeeping when the base is already visibly stale. The
+  // authoritative guard is the WHERE clause on the UPDATE below; this only avoids side effects.
+  if (options?.baseContentHash !== undefined && resolvedDraft?.content_hash !== options.baseContentHash) {
+    throw new ConflictError('page_layers', pageId, options.baseContentHash, resolvedDraft);
+  }
 
   // Detect removed and changed layer content, update translations accordingly
   if (resolvedDraft && resolvedDraft.layers) {
@@ -178,13 +197,31 @@ export async function upsertDraftLayers(
 
   if (resolvedDraft) {
     // Update existing draft
-    const { data, error } = await client
+    const query = client
       .from('page_layers')
       .update(updateData)
       .eq('id', resolvedDraft.id)
-      .eq('is_published', false)
-      .select()
-      .single();
+      .eq('is_published', false);
+
+    if (options?.baseContentHash !== undefined) {
+      // Conditional: zero matched rows means someone else wrote this tree between our read and
+      // our write, so nothing is overwritten and the caller gets the current row to work from.
+      const { data, error } = await query.eq('content_hash', options.baseContentHash).select();
+
+      if (error) {
+        throw new Error(`Failed to update draft: ${error.message}`);
+      }
+
+      const rows = (data as PageLayers[] | null) || [];
+      if (rows.length === 0) {
+        const latest = await getDraftLayers(pageId);
+        throw new ConflictError('page_layers', pageId, options.baseContentHash, latest);
+      }
+
+      return rows[0];
+    }
+
+    const { data, error } = await query.select().single();
 
     if (error) {
       throw new Error(`Failed to update draft: ${error.message}`);

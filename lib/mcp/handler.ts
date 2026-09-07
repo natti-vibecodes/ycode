@@ -4,6 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { validateToken } from '@/lib/repositories/mcpTokenRepository';
 import { createMcpServer } from '@/lib/mcp/server';
 import { normalizeScopes, type McpScope } from '@/lib/mcp/scopes';
+import type { McpCaller } from '@/lib/mcp/caller';
 import { getCachedToken, setCachedToken } from '@/lib/mcp/token-cache';
 
 /**
@@ -75,8 +76,8 @@ export function addCorsHeaders(response: Response): Response {
   });
 }
 
-function createSessionTransport(scopes: McpScope[] | null) {
-  const server = createMcpServer(scopes);
+function createSessionTransport(scopes: McpScope[] | null, caller?: McpCaller) {
+  const server = createMcpServer(scopes, caller);
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     enableJsonResponse: true,
@@ -159,7 +160,7 @@ function ensureAcceptHeader(request: Request): Request {
   });
 }
 
-async function handlePost(request: Request, scopes: McpScope[] | null): Promise<Response> {
+async function handlePost(request: Request, scopes: McpScope[] | null, caller?: McpCaller): Promise<Response> {
   const normalized = ensureAcceptHeader(request);
   const sessionId = normalized.headers.get('mcp-session-id');
 
@@ -172,7 +173,7 @@ async function handlePost(request: Request, scopes: McpScope[] | null): Promise<
   const body = await normalized.json();
   const isInit = !Array.isArray(body) && body.method === 'initialize';
 
-  const { server, transport } = createSessionTransport(scopes);
+  const { server, transport } = createSessionTransport(scopes, caller);
   await server.connect(transport);
 
   if (isInit) {
@@ -197,10 +198,10 @@ async function handlePost(request: Request, scopes: McpScope[] | null): Promise<
   return transport.handleRequest(actualReq, { parsedBody: body });
 }
 
-export async function handleMcpPost(request: Request, scopes: McpScope[] | null = null): Promise<Response> {
+export async function handleMcpPost(request: Request, scopes: McpScope[] | null = null, caller?: McpCaller): Promise<Response> {
   cleanupStaleSessions();
   try {
-    const response = await handlePost(request, scopes);
+    const response = await handlePost(request, scopes, caller);
     return addCorsHeaders(response);
   } catch (error) {
     console.error('[MCP POST] Error:', error);

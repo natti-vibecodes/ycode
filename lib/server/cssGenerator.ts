@@ -148,7 +148,7 @@ export async function generateAndSaveDraftCSS(): Promise<string> {
   const classNames = Array.from(classes);
   const css = await compileCss(classNames);
 
-  await setSetting('draft_css', css);
+  await setSetting('draft_css', css, { caller: 'server:cssGenerator' });
 
   return css;
 }

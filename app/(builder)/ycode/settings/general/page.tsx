@@ -172,7 +172,7 @@ export default function GeneralSettingsPage() {
   // Save SEO settings
   const saveSeoSettings = useCallback(async () => {
     setIsSaving(true);
-    await saveSettings({
+    const ok = await saveSettings({
       sitemap: sitemapSettings,
       robots_txt: robotsTxt,
       llms_txt: llmsTxt,
@@ -180,16 +180,21 @@ export default function GeneralSettingsPage() {
       google_site_verification: googleSiteVerification,
       global_canonical_url: globalCanonicalUrl,
     });
+    if (!ok) toast.error(useSettingsStore.getState().error || 'Settings could not be saved. Please try again.');
     setIsSaving(false);
   }, [saveSettings, sitemapSettings, robotsTxt, llmsTxt, gaMeasurementId, googleSiteVerification, globalCanonicalUrl]);
 
   // Save custom code settings
   const saveCustomCodeSettings = useCallback(async () => {
     setIsSavingCustomCode(true);
-    await saveSettings({
+    const ok = await saveSettings({
       custom_code_head: customCodeHead,
       custom_code_body: customCodeBody,
     });
+    // A refused save is the interesting case here: the global head is also written by
+    // `sync-chrome.py`, so saving a form loaded before a sync would replay the old stylesheet
+    // link and SRI digests over every page (SCA-1480). The store returns false and explains.
+    if (!ok) toast.error(useSettingsStore.getState().error || 'Custom code could not be saved. Please try again.');
     setIsSavingCustomCode(false);
   }, [saveSettings, customCodeHead, customCodeBody]);
 

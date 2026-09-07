@@ -669,7 +669,7 @@ export async function POST(request: NextRequest) {
         if (currentColorHash !== lastColorHash) {
           globalChanged = true;
           globalChangedReason = `color hash mismatch: ${lastColorHash?.slice(0, 8) ?? 'null'} → ${currentColorHash.slice(0, 8)}`;
-          await setSetting('color_variables_published_hash', currentColorHash);
+          await setSetting('color_variables_published_hash', currentColorHash, { caller: 'route:/ycode/api/publish' });
         }
       } catch (err) {
         globalChanged = true;

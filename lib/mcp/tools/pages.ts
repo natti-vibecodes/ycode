@@ -272,7 +272,7 @@ Examples:
         newUrl: new_url,
         ...(type && { type }),
       };
-      await setSetting(REDIRECTS_KEY, [...redirects, newRedirect]);
+      await setSetting(REDIRECTS_KEY, [...redirects, newRedirect], { caller: 'mcp:add_redirect' });
       return { content: [{ type: 'text' as const, text: JSON.stringify({ message: 'Redirect added', redirect: newRedirect }) }] };
     },
   );
@@ -300,7 +300,7 @@ Examples:
       };
       const next = [...redirects];
       next[idx] = updated;
-      await setSetting(REDIRECTS_KEY, next);
+      await setSetting(REDIRECTS_KEY, next, { caller: 'mcp:redirects' });
       return { content: [{ type: 'text' as const, text: JSON.stringify({ message: 'Redirect updated', redirect: updated }) }] };
     },
   );
@@ -317,7 +317,7 @@ Examples:
       if (next.length === redirects.length) {
         return { content: [{ type: 'text' as const, text: `Error: Redirect "${redirect_id}" not found.` }], isError: true };
       }
-      await setSetting(REDIRECTS_KEY, next);
+      await setSetting(REDIRECTS_KEY, next, { caller: 'mcp:redirects' });
       return { content: [{ type: 'text' as const, text: `Redirect ${redirect_id} deleted` }] };
     },
   );
