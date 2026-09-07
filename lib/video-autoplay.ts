@@ -1,0 +1,183 @@
+/**
+ * SCA-1468 (audit 2026-09-06 #28 + #42) — DEFERRED AUTOPLAY for server-rendered <video>.
+ *
+ * ## The bug this exists to remove
+ *
+ * `autoplay` in the HTML defeats `preload="none"` in Chrome. An autoplay-eligible element is
+ * loaded eagerly by the media engine regardless of its `preload` hint, so EVERY video on a page
+ * — including the ones nobody will ever scroll to — buffers before a single line of page script
+ * runs. Measured on the served site: 11.4 MB on `/services/design-branding`, 6.8 MB on the
+ * homepage, with `.grow-video` reaching 8.4 s buffered by 1.3 s purely from markup.
+ *
+ * Three generations of client-side workarounds have tried to correct this AFTER hydration — a
+ * page-local `play()` shim, then the chrome's visibility gate (SCA-1452, SCA-1467). None of them
+ * can win: by the time they run, the bytes are already in flight. The renderer is the only place
+ * that can decide this, because the renderer is what writes the attribute.
+ *
+ * ## The shape of the fix
+ *
+ * A video whose author asked for autoplay is rendered WITHOUT `autoplay`, with `preload="none"`,
+ * and with `data-autoplay="1"` carrying the intent. `components/VideoAutoplayInitializer` then
+ * starts playback when the element is actually visible. The nav sphere is the proof this works:
+ * its chrome markup already says `preload="none"` with no `autoplay`, and it stays at 0 bytes
+ * until it is revealed.
+ *
+ * ## Fail-visible
+ *
+ * Nothing here can hide a video. A configured `poster` still renders and still paints with no
+ * JS at all; a video declared above the fold with no poster keeps `preload="metadata"` so its
+ * first frame paints without JS too. There is no `prefers-reduced-motion` gate — motion is not
+ * gated on this site (animate-always), and this is a bandwidth decision, not a motion one.
+ *
+ * ## Editor surfaces are NOT affected
+ *
+ * This module is consumed only by `LayerRendererPublic`. The builder canvas (`LayerRenderer`)
+ * keeps eager autoplay, because a designer placing a video expects to see it play immediately.
+ */
+
+/** Marks a video whose autoplay was deferred to the visibility driver. */
+export const AUTOPLAY_MARKER_ATTR = 'data-autoplay';
+export const AUTOPLAY_MARKER_VALUE = '1';
+
+/** CSS selector for every video the driver owns. */
+export const DEFERRED_AUTOPLAY_SELECTOR = `video[${AUTOPLAY_MARKER_ATTR}="${AUTOPLAY_MARKER_VALUE}"]`;
+
+/**
+ * Opt OUT of deferral on one layer (restores the pre-SCA-1468 eager `autoplay` + `play()`).
+ * Default TRUE — the fork default is defer-and-play-on-visible.
+ */
+export const DEFER_ATTR = 'data-autoplay-defer';
+
+/**
+ * Declare a layer as above the fold. This is a SETTING, deliberately, because the renderer
+ * cannot know where a layer lands: layout is CSS, and guessing from tree position is how you
+ * ship a hero that never paints. Default FALSE.
+ */
+export const ABOVE_FOLD_ATTR = 'data-autoplay-above-fold';
+
+/** The two fields a layer can carry an attribute in (SCA-1348). */
+export interface AttributeCarrier {
+  attributes?: Record<string, unknown> | null;
+  settings?: { customAttributes?: Record<string, string> | null } | null;
+}
+
+/**
+ * Read one attribute off a layer, honouring both carriers with customAttributes last-wins.
+ *
+ * Kept local rather than importing `resolveLayerAttribute` from `lib/layer-utils` so this module
+ * stays dependency-free: `layer-utils` pulls the whole renderer utility surface, and this file is
+ * imported by a `'use client'` component whose entire job is to be tiny.
+ */
+export function readLayerAttribute(layer: AttributeCarrier | null | undefined, name: string): string | undefined {
+  if (!layer) return undefined;
+  const wanted = name.toLowerCase();
+  const pick = (source: Record<string, unknown> | null | undefined) => {
+    if (!source) return undefined;
+    for (const [key, value] of Object.entries(source)) {
+      if (key.toLowerCase() !== wanted) continue;
+      if (value === null || value === undefined) return undefined;
+      return String(value);
+    }
+    return undefined;
+  };
+  return pick(layer.settings?.customAttributes) ?? pick(layer.attributes);
+}
+
+/**
+ * Coerce a layer attribute to a boolean.
+ *
+ * `attributes` holds real booleans (the builder's video panel writes them), while the MCP surface
+ * can only write `customAttributes`, which is typed `Record<string, string>` — so `"true"` and a
+ * bare `""` (how HTML spells a set boolean attribute) have to mean the same thing as `true`, or
+ * the setting is unreachable through the API that agents actually have.
+ */
+export function readLayerFlag(
+  layer: AttributeCarrier | null | undefined,
+  name: string,
+  fallback: boolean,
+): boolean {
+  const raw = readLayerAttribute(layer, name);
+  if (raw === undefined) return fallback;
+  const value = raw.trim().toLowerCase();
+  if (value === 'false' || value === '0' || value === 'off' || value === 'no') return false;
+  if (value === 'true' || value === '1' || value === 'on' || value === 'yes' || value === '') return true;
+  return fallback;
+}
+
+/** Did the author ask this video to autoplay? */
+export function isAutoplayVideoLayer(layer: AttributeCarrier | null | undefined): boolean {
+  return readLayerFlag(layer, 'autoplay', false);
+}
+
+/**
+ * Is this layer rendered in the deferred form — no `autoplay` attribute, marker instead?
+ * True for every autoplay video unless the layer explicitly opts out.
+ */
+export function isDeferredAutoplayLayer(layer: AttributeCarrier | null | undefined): boolean {
+  return isAutoplayVideoLayer(layer) && readLayerFlag(layer, DEFER_ATTR, true);
+}
+
+/**
+ * The `preload` a deferred-autoplay video is rendered with.
+ *
+ * `none` unless the layer declares itself above the fold AND has no poster to paint — in which
+ * case `metadata` buys a first frame (a few tens of kB) rather than an empty box. A poster is
+ * strictly better than `metadata` for the same purpose, so it wins when both are available.
+ */
+export function resolveDeferredPreload(
+  layer: AttributeCarrier | null | undefined,
+  options: { hasPoster: boolean },
+): 'none' | 'metadata' {
+  if (options.hasPoster) return 'none';
+  return readLayerFlag(layer, ABOVE_FOLD_ATTR, false) ? 'metadata' : 'none';
+}
+
+/**
+ * A layer shaped enough to walk a tree of them. Structural rather than importing `Layer`, so
+ * this module stays free of the types barrel — `variables` is read only for the one rich-text
+ * shape the walk descends into.
+ */
+interface VideoScanLayer extends AttributeCarrier {
+  name?: string;
+  children?: VideoScanLayer[] | null;
+  variables?: { text?: unknown } | null;
+}
+
+/**
+ * Does this tree contain a video the driver would own?
+ *
+ * Used to decide whether the page ships `VideoAutoplayInitializer` at all. It descends into
+ * children and into rich-text-embedded components' pre-resolved layers, matching
+ * `layerTreeHasLayer` in PageRenderer — but callers must ALSO scan component masters, because a
+ * component instance carries no children in the page tree and the reel video on
+ * `/services/design-branding` lives inside one. Over-mounting is harmless (the driver finds no
+ * marked videos and does nothing); under-mounting leaves a video permanently paused.
+ */
+export function treeHasDeferredAutoplayVideo(layers: readonly VideoScanLayer[] | null | undefined): boolean {
+  if (!layers) return false;
+  for (const layer of layers) {
+    if (layer?.name === 'video' && isDeferredAutoplayLayer(layer)) return true;
+    const textVar = layer?.variables?.text as { type?: string; data?: { content?: unknown } } | undefined;
+    if (textVar?.type === 'dynamic_rich_text' && textVar.data?.content
+      && tiptapHasDeferredAutoplayVideo(textVar.data.content)) {
+      return true;
+    }
+    if (layer?.children && treeHasDeferredAutoplayVideo(layer.children)) return true;
+  }
+  return false;
+}
+
+function tiptapHasDeferredAutoplayVideo(node: unknown): boolean {
+  if (!node || typeof node !== 'object') return false;
+  const n = node as { type?: string; attrs?: { _resolvedLayers?: unknown }; content?: unknown };
+  if (n.type === 'richTextComponent' && Array.isArray(n.attrs?._resolvedLayers)
+    && treeHasDeferredAutoplayVideo(n.attrs._resolvedLayers as VideoScanLayer[])) {
+    return true;
+  }
+  if (Array.isArray(n.content)) {
+    for (const child of n.content) {
+      if (tiptapHasDeferredAutoplayVideo(child)) return true;
+    }
+  }
+  return false;
+}

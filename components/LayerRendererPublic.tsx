@@ -20,6 +20,7 @@ import { getLayerHtmlTag, getClassesString, getText, resolveFieldValue, isTextCo
 import { getMapIframeProps, DEFAULT_MAP_SETTINGS, resolveMarkerColor } from '@/lib/map-utils';
 import { HTML_TO_REACT_ATTRS } from '@/lib/parse-head-html';
 import { isLayerEmpty } from '@/lib/layer-emptiness';
+import { AUTOPLAY_MARKER_ATTR, AUTOPLAY_MARKER_VALUE, isDeferredAutoplayLayer, resolveDeferredPreload } from '@/lib/video-autoplay';
 import { splitInlineHandlers, applyInlineHandlers } from '@/lib/inline-handlers';
 import { FORM_SUCCESS_EVENT, FORM_ERROR_EVENT, buildFormEventDetail, dispatchFormEvent } from '@/lib/form-events';
 import { SWIPER_CLASS_MAP, SWIPER_DATA_ATTR_MAP } from '@/lib/slider-constants';
@@ -1689,6 +1690,15 @@ const LayerItem: React.FC<{
       // is actually muted at play() time.
       const shouldMute = mediaProps.muted === true;
 
+      // SCA-1468: an autoplaying <video> is rendered in DEFERRED form — no `autoplay`,
+      // `preload="none"`, and `data-autoplay="1"` carrying the intent for
+      // VideoAutoplayInitializer to act on once the element is visible. `autoplay` in the
+      // markup defeats `preload="none"` in Chrome, so without this every below-fold video
+      // on the page buffers in full before any script can run (11.4 MB on one service page)
+      // and no client-side gate can catch up with bytes already in flight. See
+      // lib/video-autoplay.ts. Audio is untouched: it has no visibility to key on.
+      const deferAutoplay = htmlTag === 'video' && shouldAutoPlay && isDeferredAutoplayLayer(effectiveLayer);
+
       // Mobile (iOS/Android) only autoplays videos rendered inline. Without
       // playsInline it forces fullscreen and blocks autoplay.
       if (htmlTag === 'video') {
@@ -1701,6 +1711,15 @@ const LayerItem: React.FC<{
 
       if (posterUrl && htmlTag === 'video') {
         mediaProps.poster = posterUrl;
+      }
+
+      if (deferAutoplay) {
+        mediaProps[AUTOPLAY_MARKER_ATTR] = AUTOPLAY_MARKER_VALUE;
+        // Written after the spreads so it beats an author `preload` from either carrier: a
+        // stale `preload="auto"` is exactly the value this change exists to stop honouring
+        // once playback is deferred. `loop` and `playsinline` still render; `muted` keeps
+        // riding the ref below, because React will not reflect it during SSR.
+        mediaProps.preload = resolveDeferredPreload(effectiveLayer, { hasPoster: Boolean(posterUrl) });
       }
 
       // Handle special attributes that need to be set on the DOM element
@@ -1727,7 +1746,10 @@ const LayerItem: React.FC<{
                 element.muted = true;
                 element.setAttribute('muted', '');
               }
-              if (shouldAutoPlay) {
+              // SCA-1468: only the NON-deferred path starts playback here. Restoring the
+              // property at mount is what made the renderer itself a parse-time downloader —
+              // it played every video on the page, on screen or not.
+              if (shouldAutoPlay && !deferAutoplay) {
                 element.autoplay = true;
                 element.setAttribute('autoplay', '');
                 element.play().catch(() => {});
