@@ -669,10 +669,17 @@ const LayerItem: React.FC<{
   // Get image alt text, resolve inline variables, and apply translation if available.
   // Alt is an attribute and must be a plain string: if a Tiptap doc slips in
   // (e.g. legacy data), extract its text instead of stringifying to "[object Object]".
+  //
+  // SCA-1490: an empty alt falls through as `alt=""` — it is NOT coerced to "Image".
+  // This is upstream parity (ycode e048b0f, "fix: improve published HTML accessibility"),
+  // adopted here ahead of the wider merge because the coercion made the Definition of Done's
+  // "decorative images: explicit alt=\"\"" box unachievable from any surface: the builder's own
+  // default for a new image is createDynamicTextVariable(''), so every undescribed image
+  // announced itself to a screen reader as "Image" (90 of them, on 23 pages).
   const rawImageAltContent = getDynamicTextContent(effectiveImageSettings?.alt) as unknown;
   const rawImageAlt = typeof rawImageAltContent === 'object' && rawImageAltContent !== null
-    ? (extractPlainTextFromTiptap(rawImageAltContent) || 'Image')
-    : String(rawImageAltContent || 'Image');
+    ? (extractPlainTextFromTiptap(rawImageAltContent) || '')
+    : String(rawImageAltContent || '');
   const originalImageAlt = rawImageAlt.includes('<ycode-inline-variable>')
     ? resolveInlineVariablesFromData(rawImageAlt, collectionLayerData, pageCollectionItemData ?? undefined, timezone, effectiveLayerDataMap)
     : rawImageAlt;
@@ -682,7 +689,7 @@ const LayerItem: React.FC<{
     translations,
     pageId,
     layer._masterComponentId
-  ) || 'Image';
+  ) || '';
   const imageAlt = translatedImageAlt;
 
   // Public path: audio/video/icon component variable overrides are pre-baked
@@ -1104,9 +1111,17 @@ const LayerItem: React.FC<{
       // browser intrinsic-dimension math and shrink the rendered image).
       const srcset = generateImageSrcset(finalImageUrl, undefined, undefined, intrinsicWidth);
 
+      // An explicit `alt` attribute wins over the image variable (SCA-1490), the same way
+      // customAttributes beat attributes on every other element. `applyCustomAttributes` already
+      // put it on elementProps, but the spread below re-overwrote it unconditionally — so an
+      // `alt` written through custom_attributes/attributes was silently inert on images only.
+      // Same shape as the SCA-1348 `loading` bug, which was fixed for `loading` and left here.
+      // `?? `, not `||`: an explicit `alt=""` is a value (decorative), not an absence.
+      const altOverride = resolveLayerAttribute(layer, 'alt');
+
       const imageProps: Record<string, any> = {
         ...elementProps,
-        alt: imageAlt,
+        alt: altOverride ?? imageAlt,
         src: optimizedSrc,
         decoding: 'async',
       };

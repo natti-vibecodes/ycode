@@ -10,7 +10,7 @@ import { useAuthStore } from '@/stores/useAuthStore';
 import type { Layer, Locale, ComponentVariable, FormSettings, LinkSettings, Breakpoint, CollectionItemWithValues, CollectionField, Component, DynamicTextVariable, DynamicRichTextVariable } from '@/types';
 import type { UseLiveLayerUpdatesReturn } from '@/hooks/use-live-layer-updates';
 import type { UseLiveComponentUpdatesReturn } from '@/hooks/use-live-component-updates';
-import { getLayerHtmlTag, getClassesString, getText, resolveFieldValue, isTextEditable, isTextContentLayer, isRichTextLayer, getCollectionVariable, evaluateVisibility, findAncestorByName, filterDisabledSliderLayers, getLayerCmsFieldBinding, findLayerById, applyCustomAttributes, containsLayerId } from '@/lib/layer-utils';
+import { getLayerHtmlTag, getClassesString, getText, resolveFieldValue, isTextEditable, isTextContentLayer, isRichTextLayer, getCollectionVariable, evaluateVisibility, findAncestorByName, filterDisabledSliderLayers, getLayerCmsFieldBinding, findLayerById, applyCustomAttributes, containsLayerId, resolveLayerAttribute } from '@/lib/layer-utils';
 import { isLayerEmpty } from '@/lib/layer-emptiness';
 import { getMapIframeProps, DEFAULT_MAP_SETTINGS, resolveMarkerColor } from '@/lib/map-utils';
 import { HTML_TO_REACT_ATTRS } from '@/lib/parse-head-html';
@@ -1214,10 +1214,12 @@ const LayerItemImpl: React.FC<{
   // Get image alt text, resolve inline variables, and apply translation if available.
   // Alt is an attribute and must be a plain string: if a Tiptap doc slips in
   // (e.g. legacy data), extract its text instead of stringifying to "[object Object]".
+  // SCA-1490: an empty alt stays empty here too, so the canvas and the served page agree about
+  // which images are decorative. Upstream parity (ycode e048b0f).
   const rawImageAltContent = getDynamicTextContent(effectiveImageSettings?.alt) as unknown;
   const rawImageAlt = typeof rawImageAltContent === 'object' && rawImageAltContent !== null
-    ? (extractPlainTextFromTiptap(rawImageAltContent) || 'Image')
-    : String(rawImageAltContent || 'Image');
+    ? (extractPlainTextFromTiptap(rawImageAltContent) || '')
+    : String(rawImageAltContent || '');
   const originalImageAlt = rawImageAlt.includes('<ycode-inline-variable>')
     ? resolveInlineVariablesFromData(rawImageAlt, collectionLayerData, pageCollectionItemData ?? undefined, timezone, effectiveLayerDataMap)
     : rawImageAlt;
@@ -1227,7 +1229,7 @@ const LayerItemImpl: React.FC<{
     translations,
     pageId,
     layer._masterComponentId
-  ) || 'Image';
+  ) || '';
   const imageAlt = translatedImageAlt;
 
   // Resolve audio source - check for linked component variable first
@@ -2529,9 +2531,13 @@ const LayerItemImpl: React.FC<{
       // browser intrinsic-dimension math and shrink the rendered image).
       const srcset = generateImageSrcset(finalImageUrl, undefined, undefined, intrinsicWidth);
 
+      // An explicit `alt` attribute wins over the image variable (SCA-1490) — same precedence
+      // as the public renderer, so the canvas does not disagree with what ships.
+      const altOverride = resolveLayerAttribute(layer, 'alt');
+
       const imageProps: Record<string, any> = {
         ...elementProps,
-        alt: imageAlt,
+        alt: altOverride ?? imageAlt,
         src: optimizedSrc,
         decoding: 'async',
       };
