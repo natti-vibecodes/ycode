@@ -20,7 +20,7 @@ import { getLayerHtmlTag, getClassesString, getText, resolveFieldValue, isTextCo
 import { getMapIframeProps, DEFAULT_MAP_SETTINGS, resolveMarkerColor } from '@/lib/map-utils';
 import { HTML_TO_REACT_ATTRS } from '@/lib/parse-head-html';
 import { isLayerEmpty } from '@/lib/layer-emptiness';
-import { AUTOPLAY_MARKER_ATTR, AUTOPLAY_MARKER_VALUE, isDeferredAutoplayLayer, resolveDeferredPreload } from '@/lib/video-autoplay';
+import { AUTOPLAY_MARKER_ATTR, AUTOPLAY_MARKER_VALUE, isAutoplayMediaLayer, isDeferredAutoplayLayer, readLayerFlag, resolveVideoPreload } from '@/lib/video-autoplay';
 import { splitInlineHandlers, applyInlineHandlers } from '@/lib/inline-handlers';
 import { FORM_SUCCESS_EVENT, FORM_ERROR_EVENT, buildFormEventDetail, dispatchFormEvent } from '@/lib/form-events';
 import { SWIPER_CLASS_MAP, SWIPER_DATA_ATTR_MAP } from '@/lib/slider-constants';
@@ -1682,13 +1682,20 @@ const LayerItem: React.FC<{
       // React treats autoPlay as a DOM property, not an HTML attribute,
       // so it won't survive SSR or hydration. Remove from props and
       // apply via ref to avoid both the warning and the rendering issue.
-      const shouldAutoPlay = mediaProps.autoplay === true;
+      //
+      // Read through the layer rather than off mediaProps alone (SCA-1468): `attributes` is
+      // normalised to real booleans, but `customAttributes` — the ONLY carrier the MCP can
+      // write — stays a string, so `autoplay: "true"` set through the API compared unequal to
+      // `true` here and did nothing at all. That unreachability is what the chrome's video gate
+      // was built around in the first place.
+      const shouldAutoPlay = mediaProps.autoplay === true || isAutoplayMediaLayer(effectiveLayer);
       delete mediaProps.autoplay;
 
       // React doesn't reliably reflect `muted` to the DOM during SSR/hydration,
       // so apply it via ref. Mobile browsers reject autoplay unless the element
-      // is actually muted at play() time.
-      const shouldMute = mediaProps.muted === true;
+      // is actually muted at play() time — which makes this load-bearing for deferred
+      // autoplay, so it reads through the layer for the same reason as above.
+      const shouldMute = mediaProps.muted === true || readLayerFlag(effectiveLayer, 'muted', false);
 
       // SCA-1468: an autoplaying <video> is rendered in DEFERRED form — no `autoplay`,
       // `preload="none"`, and `data-autoplay="1"` carrying the intent for
@@ -1713,13 +1720,17 @@ const LayerItem: React.FC<{
         mediaProps.poster = posterUrl;
       }
 
+      if (htmlTag === 'video') {
+        // Written after the spreads so it beats an author `preload` from either carrier. It
+        // applies to EVERY video, not just autoplaying ones: on this site not one video layer
+        // carries `autoplay`, and `preload="auto"` alone still pulled 6.03 MB of a below-fold
+        // reel before any script ran. `loop` and `playsinline` still render; `muted` keeps
+        // riding the ref below, because React will not reflect it during SSR.
+        mediaProps.preload = resolveVideoPreload(effectiveLayer, { hasPoster: Boolean(posterUrl) });
+      }
+
       if (deferAutoplay) {
         mediaProps[AUTOPLAY_MARKER_ATTR] = AUTOPLAY_MARKER_VALUE;
-        // Written after the spreads so it beats an author `preload` from either carrier: a
-        // stale `preload="auto"` is exactly the value this change exists to stop honouring
-        // once playback is deferred. `loop` and `playsinline` still render; `muted` keeps
-        // riding the ref below, because React will not reflect it during SSR.
-        mediaProps.preload = resolveDeferredPreload(effectiveLayer, { hasPoster: Boolean(posterUrl) });
       }
 
       // Handle special attributes that need to be set on the DOM element

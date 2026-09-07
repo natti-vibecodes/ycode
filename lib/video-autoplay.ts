@@ -1,38 +1,48 @@
 /**
- * SCA-1468 (audit 2026-09-06 #28 + #42) — DEFERRED AUTOPLAY for server-rendered <video>.
+ * SCA-1468 (audit 2026-09-06 #28 + #42) — the fork owns how a public <video> LOADS.
  *
  * ## The bug this exists to remove
  *
- * `autoplay` in the HTML defeats `preload="none"` in Chrome. An autoplay-eligible element is
- * loaded eagerly by the media engine regardless of its `preload` hint, so EVERY video on a page
- * — including the ones nobody will ever scroll to — buffers before a single line of page script
- * runs. Measured on the served site: 11.4 MB on `/services/design-branding`, 6.8 MB on the
- * homepage, with `.grow-video` reaching 8.4 s buffered by 1.3 s purely from markup.
+ * Two independent mechanisms made every page download every video before a visitor could reach
+ * one, and both live in the renderer:
  *
- * Three generations of client-side workarounds have tried to correct this AFTER hydration — a
+ *  1. `preload` was passed through from the layer. `preload="auto"` means "fetch the whole file",
+ *     and it sat on a video 1751 px down `/services/design-branding` — 6.03 MB, fully buffered at
+ *     3 s with no scroll and the element paused. Two more layers carried `preload="metadata"`.
+ *     Measured post-press on 2026-09-07: 6.85 MB on that page, 6.20 MB on the homepage, at
+ *     1440x900 and again at 375.
+ *  2. `autoplay` was written into the HTML and the renderer's own ref called `play()` at
+ *     hydration, on screen or not. `autoplay` in the markup also DEFEATS `preload="none"` in
+ *     Chrome: an autoplay-eligible element is loaded eagerly whatever its preload hint says.
+ *
+ * Three generations of client-side workarounds have tried to correct (2) after hydration — a
  * page-local `play()` shim, then the chrome's visibility gate (SCA-1452, SCA-1467). None of them
- * can win: by the time they run, the bytes are already in flight. The renderer is the only place
- * that can decide this, because the renderer is what writes the attribute.
+ * can win, because by the time they run the bytes are already in flight. The renderer is the only
+ * place that can decide this, because the renderer is what writes the attributes.
  *
  * ## The shape of the fix
  *
- * A video whose author asked for autoplay is rendered WITHOUT `autoplay`, with `preload="none"`,
- * and with `data-autoplay="1"` carrying the intent. `components/VideoAutoplayInitializer` then
- * starts playback when the element is actually visible. The nav sphere is the proof this works:
- * its chrome markup already says `preload="none"` with no `autoplay`, and it stays at 0 bytes
- * until it is revealed.
+ *  - `preload` is resolved here for EVERY public video, defaulting to `none`, with one layer
+ *    setting (`data-video-above-fold`) as the escape. See `resolveVideoPreload`.
+ *  - a video whose author asked for autoplay is rendered WITHOUT `autoplay`, marked
+ *    `data-autoplay="1"`, and started by `components/VideoAutoplayInitializer` once it is
+ *    genuinely visible.
+ *
+ * The nav sphere is the proof this works: its chrome markup already says `preload="none"` with no
+ * `autoplay`, and it stays at 0 bytes until it is revealed.
  *
  * ## Fail-visible
  *
- * Nothing here can hide a video. A configured `poster` still renders and still paints with no
- * JS at all; a video declared above the fold with no poster keeps `preload="metadata"` so its
- * first frame paints without JS too. There is no `prefers-reduced-motion` gate — motion is not
- * gated on this site (animate-always), and this is a bandwidth decision, not a motion one.
+ * Nothing here can hide a video. A configured `poster` still renders and still paints with no JS
+ * at all; a video declared above the fold with no poster gets `preload="metadata"` so its first
+ * frame paints without JS too. There is no `prefers-reduced-motion` gate — motion is not gated on
+ * this site (animate-always), and this is a bandwidth decision, not a motion one.
  *
  * ## Editor surfaces are NOT affected
  *
  * This module is consumed only by `LayerRendererPublic`. The builder canvas (`LayerRenderer`)
- * keeps eager autoplay, because a designer placing a video expects to see it play immediately.
+ * keeps eager autoplay and the author's own preload, because a designer placing a video expects
+ * to see it play immediately.
  */
 
 /** Marks a video whose autoplay was deferred to the visibility driver. */
@@ -49,11 +59,12 @@ export const DEFERRED_AUTOPLAY_SELECTOR = `video[${AUTOPLAY_MARKER_ATTR}="${AUTO
 export const DEFER_ATTR = 'data-autoplay-defer';
 
 /**
- * Declare a layer as above the fold. This is a SETTING, deliberately, because the renderer
+ * Declare a layer as visible at load. This is a SETTING, deliberately, because the renderer
  * cannot know where a layer lands: layout is CSS, and guessing from tree position is how you
- * ship a hero that never paints. Default FALSE.
+ * ship a hero that never paints. Default FALSE — i.e. every video is treated as below the fold
+ * until someone says otherwise, which is the safe direction for bandwidth.
  */
-export const ABOVE_FOLD_ATTR = 'data-autoplay-above-fold';
+export const ABOVE_FOLD_ATTR = 'data-video-above-fold';
 
 /** The two fields a layer can carry an attribute in (SCA-1348). */
 export interface AttributeCarrier {
@@ -104,8 +115,9 @@ export function readLayerFlag(
   return fallback;
 }
 
-/** Did the author ask this video to autoplay? */
-export function isAutoplayVideoLayer(layer: AttributeCarrier | null | undefined): boolean {
+/** Did the author ask this media layer to autoplay? Reads both carriers, so a string "true"
+ * written through the MCP's `customAttributes` counts — it did not before SCA-1468. */
+export function isAutoplayMediaLayer(layer: AttributeCarrier | null | undefined): boolean {
   return readLayerFlag(layer, 'autoplay', false);
 }
 
@@ -114,22 +126,38 @@ export function isAutoplayVideoLayer(layer: AttributeCarrier | null | undefined)
  * True for every autoplay video unless the layer explicitly opts out.
  */
 export function isDeferredAutoplayLayer(layer: AttributeCarrier | null | undefined): boolean {
-  return isAutoplayVideoLayer(layer) && readLayerFlag(layer, DEFER_ATTR, true);
+  return isAutoplayMediaLayer(layer) && readLayerFlag(layer, DEFER_ATTR, true);
 }
 
+/** The values HTML defines for `preload`. Anything else on a layer is treated as unset. */
+const PRELOAD_VALUES = ['none', 'metadata', 'auto'] as const;
+export type VideoPreload = (typeof PRELOAD_VALUES)[number];
+
 /**
- * The `preload` a deferred-autoplay video is rendered with.
+ * The `preload` the fork renders on a public <video>. This applies to EVERY video, not only
+ * autoplaying ones, and it is the half of SCA-1468 that the measurement actually turned on.
  *
- * `none` unless the layer declares itself above the fold AND has no poster to paint — in which
- * case `metadata` buys a first frame (a few tens of kB) rather than an empty box. A poster is
- * strictly better than `metadata` for the same purpose, so it wins when both are available.
+ * The four video layers on /services/design-branding carry no `autoplay` at all — the chrome's
+ * visibility gate is what plays them — and they still downloaded 6.85 MB before any scroll,
+ * because `preload="auto"` was baked into one layer's attributes and `preload="metadata"` into
+ * two more. `preload="auto"` means "fetch the whole file"; on a layer 1751 px down the page that
+ * is never what anyone chose, it is what a port left behind. So the renderer owns the value:
+ *
+ *  - below the fold (the DEFAULT, and the only safe assumption a renderer can make) → `none`.
+ *  - above the fold, per the layer's own `data-video-above-fold` → the author's `preload` if they
+ *    set a real one, else `metadata` for a first frame, else `none` when a poster already paints.
+ *
+ * The escape hatch is a single setting rather than a guess, because the renderer cannot know
+ * where a layer lands — layout is CSS.
  */
-export function resolveDeferredPreload(
+export function resolveVideoPreload(
   layer: AttributeCarrier | null | undefined,
   options: { hasPoster: boolean },
-): 'none' | 'metadata' {
-  if (options.hasPoster) return 'none';
-  return readLayerFlag(layer, ABOVE_FOLD_ATTR, false) ? 'metadata' : 'none';
+): VideoPreload {
+  if (!readLayerFlag(layer, ABOVE_FOLD_ATTR, false)) return 'none';
+  const authored = readLayerAttribute(layer, 'preload')?.trim().toLowerCase();
+  if (authored && (PRELOAD_VALUES as readonly string[]).includes(authored)) return authored as VideoPreload;
+  return options.hasPoster ? 'none' : 'metadata';
 }
 
 /**
