@@ -134,7 +134,8 @@ describe('SCA-1490 public renderer: an empty alt ships as alt=""', () => {
 describe('SCA-1490 public renderer: an explicit alt attribute wins over the variable', () => {
   test('BEFORE-FAIL: custom_attributes.alt overrides the image variable', () => {
     // customAttributes beats attributes and beats the variable — the documented contract for
-    // every other element. On images the override was applied and then overwritten.
+    // every other element. On images the override was applied and then overwritten. A STATED
+    // value wins unconditionally; only the empty case defers (see the carve-out below).
     const attrs = renderPublic(imageLayer({
       variables: { image: alt('stale variable text') },
       settings: { customAttributes: { alt: 'LinkedIn' } },
@@ -142,14 +143,40 @@ describe('SCA-1490 public renderer: an explicit alt attribute wins over the vari
     assert.equal(attrs.alt, 'LinkedIn');
   });
 
-  test('BEFORE-FAIL: custom_attributes.alt="" marks an image decorative even over a non-empty variable', () => {
-    // `??`, not `||`: an empty override is a value. With `||` this test reads "stale variable
-    // text" and the escape hatch is still missing for exactly the case it exists to serve.
+  test('an EMPTY attribute alt does NOT delete a description the variable carries', () => {
+    // The deliberate carve-out, and the one assertion here driven by measurement rather than by
+    // the contract. This path was inert until SCA-1490, so every `alt` in an attribute map today
+    // was written into a renderer where it did nothing — switching it on reinterprets old data.
+    // Census of the live workspace 2026-09-07: 302 image layers, 8 carrying an alt attribute,
+    // and 3 of those 8 held a dormant `alt: ""` beside real text. Letting the empty win blanked
+    // all three on the served homepage — a silent accessibility deletion, which is a worse
+    // failure than ignoring an empty override. Decorative marking does not need this path:
+    // clearing the variable is the first-class field for it.
     const attrs = renderPublic(imageLayer({
       variables: { image: alt('stale variable text') },
       settings: { customAttributes: { alt: '' } },
     }));
+    assert.equal(attrs.alt, 'stale variable text');
+  });
+
+  test('BEFORE-FAIL: custom_attributes.alt="" DOES mark an image decorative when the variable is empty too', () => {
+    // The carve-out is narrow: with nothing to protect, the empty attribute still yields alt="".
+    const attrs = renderPublic(imageLayer({
+      variables: { image: alt('') },
+      settings: { customAttributes: { alt: '' } },
+    }));
     assert.equal(attrs.alt, '');
+  });
+
+  test('REGRESSION (the live homepage): a dormant alt:"" beside a description keeps the description', () => {
+    // `lyr-msj9qa09nfwanw` as it was served on 2026-09-07, before the dormant key was removed
+    // from the draft. Pinned with its real values so the carve-out cannot be "simplified" away.
+    const attrs = renderPublic(imageLayer({
+      variables: { image: alt('Radiating Hope') },
+      attributes: { loading: 'eager' },
+      settings: { customAttributes: { alt: '', src: '/a/x/work-radiating-hope.webp', class: 'pw-img' } },
+    }));
+    assert.equal(attrs.alt, 'Radiating Hope');
   });
 
   test('BEFORE-FAIL: an `attributes` alt is honoured when customAttributes does not set one', () => {

@@ -2531,13 +2531,15 @@ const LayerItemImpl: React.FC<{
       // browser intrinsic-dimension math and shrink the rendered image).
       const srcset = generateImageSrcset(finalImageUrl, undefined, undefined, intrinsicWidth);
 
-      // An explicit `alt` attribute wins over the image variable (SCA-1490) — same precedence
-      // as the public renderer, so the canvas does not disagree with what ships.
+      // A stated `alt` attribute wins over the image variable (SCA-1490) — same precedence as
+      // the public renderer, so the canvas does not disagree with what ships. `||`, not `??`:
+      // an empty attribute defers to a described variable. See LayerRendererPublic for the
+      // census that settled it.
       const altOverride = resolveLayerAttribute(layer, 'alt');
 
       const imageProps: Record<string, any> = {
         ...elementProps,
-        alt: altOverride ?? imageAlt,
+        alt: altOverride || imageAlt,
         src: optimizedSrc,
         decoding: 'async',
       };

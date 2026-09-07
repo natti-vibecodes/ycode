@@ -1111,17 +1111,28 @@ const LayerItem: React.FC<{
       // browser intrinsic-dimension math and shrink the rendered image).
       const srcset = generateImageSrcset(finalImageUrl, undefined, undefined, intrinsicWidth);
 
-      // An explicit `alt` attribute wins over the image variable (SCA-1490), the same way
+      // A STATED `alt` attribute wins over the image variable (SCA-1490), the same way
       // customAttributes beat attributes on every other element. `applyCustomAttributes` already
       // put it on elementProps, but the spread below re-overwrote it unconditionally — so an
       // `alt` written through custom_attributes/attributes was silently inert on images only.
       // Same shape as the SCA-1348 `loading` bug, which was fixed for `loading` and left here.
-      // `?? `, not `||`: an explicit `alt=""` is a value (decorative), not an absence.
+      //
+      // `||`, not `??`, and the difference is measured rather than stylistic: an EMPTY attribute
+      // does not delete a description the variable carries. Because this path was inert until
+      // now, every `alt` sitting in an attribute map today was written into a renderer where it
+      // did nothing — so switching it on reinterprets old data. Census of the live workspace
+      // 2026-09-07: 302 image layers, 8 with an alt attribute, and 3 of those 8 held a dormant
+      // `alt: ""` beside a real description ("Radiating Hope", "Atanis Biotech", the Horizon
+      // Living dek). Under `??` all three lost their alt on the served homepage. The failure is
+      // asymmetric — ignoring an empty override is visible on inspection, deleting a description
+      // is silent and reaches a screen reader — and marking an image decorative does not need
+      // this path at all: clearing the variable (`content: ""`) is the first-class field for it,
+      // and is how all 88 of the site's real decorative images are marked.
       const altOverride = resolveLayerAttribute(layer, 'alt');
 
       const imageProps: Record<string, any> = {
         ...elementProps,
-        alt: altOverride ?? imageAlt,
+        alt: altOverride || imageAlt,
         src: optimizedSrc,
         decoding: 'async',
       };
