@@ -4,11 +4,30 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getAllPages, getPageById, getPagesByFolder, createPage, updatePage, deletePage, duplicatePage } from '@/lib/repositories/pageRepository';
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
 import { upsertDraftLayers } from '@/lib/repositories/pageLayersRepository';
-import { getSettingByKey, setSetting } from '@/lib/repositories/settingsRepository';
+import { getSettingByKey } from '@/lib/repositories/settingsRepository';
+import { setSettingAndInvalidate } from '@/lib/services/settingsService';
 import { broadcastPageCreated, broadcastPageUpdated, broadcastPageDeleted, broadcastLayersChanged } from '@/lib/mcp/broadcast';
 import type { Redirect } from '@/types';
 
 const REDIRECTS_KEY = 'redirects';
+
+/**
+ * Write the redirect table through the invalidating writer (SCA-1491).
+ *
+ * Redirects are matched INSIDE the cached page route (`app/(site)/[...slug]/page.tsx`,
+ * `app/(site)/page.tsx`), which is `unstable_cache` with `revalidate: false`. A redirect written
+ * with the bare repository `setSetting` therefore lands in the row, shows up on `list_redirects`
+ * and works on the uncached `/dynamic` mirror — while the cached route keeps serving the 404 it
+ * had already cached, until someone presses Publish.
+ *
+ * SCA-1345 collapsed the settings writers onto `setSettingAndInvalidate` for exactly this reason
+ * and `lib/settings-keys.ts` names `redirects` as a key that requires invalidation; these three
+ * tools were simply missed. The expensive failure mode is not the staleness itself but the
+ * diagnosis: you write a redirect, curl the path, get a 404, and conclude the write failed.
+ */
+async function writeRedirects(next: Redirect[], caller: string): Promise<void> {
+  await setSettingAndInvalidate(REDIRECTS_KEY, next, undefined, { caller });
+}
 
 async function getRedirects(): Promise<Redirect[]> {
   const value = await getSettingByKey(REDIRECTS_KEY);
@@ -272,7 +291,7 @@ Examples:
         newUrl: new_url,
         ...(type && { type }),
       };
-      await setSetting(REDIRECTS_KEY, [...redirects, newRedirect], { caller: 'mcp:add_redirect' });
+      await writeRedirects([...redirects, newRedirect], 'mcp:add_redirect');
       return { content: [{ type: 'text' as const, text: JSON.stringify({ message: 'Redirect added', redirect: newRedirect }) }] };
     },
   );
@@ -300,7 +319,7 @@ Examples:
       };
       const next = [...redirects];
       next[idx] = updated;
-      await setSetting(REDIRECTS_KEY, next, { caller: 'mcp:redirects' });
+      await writeRedirects(next, 'mcp:update_redirect');
       return { content: [{ type: 'text' as const, text: JSON.stringify({ message: 'Redirect updated', redirect: updated }) }] };
     },
   );
@@ -317,7 +336,7 @@ Examples:
       if (next.length === redirects.length) {
         return { content: [{ type: 'text' as const, text: `Error: Redirect "${redirect_id}" not found.` }], isError: true };
       }
-      await setSetting(REDIRECTS_KEY, next, { caller: 'mcp:redirects' });
+      await writeRedirects(next, 'mcp:delete_redirect');
       return { content: [{ type: 'text' as const, text: `Redirect ${redirect_id} deleted` }] };
     },
   );
