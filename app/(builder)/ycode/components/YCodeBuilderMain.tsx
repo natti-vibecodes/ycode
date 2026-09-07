@@ -134,6 +134,31 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
   const canUndo = useEditorStore((state) => state.canUndo);
   const canRedo = useEditorStore((state) => state.canRedo);
   const editingComponentId = useEditorStore((state) => state.editingComponentId);
+
+  // A save this builder made was REFUSED because another writer changed the same tree first
+  // (SCA-1476). Nothing was overwritten and nothing is retried — the only safe move is a reload,
+  // so say exactly that and offer the button. Persistent on purpose: a toast that auto-dismisses
+  // would let her keep editing a draft that can no longer be saved.
+  const componentConflictId = useComponentsStore((state) => state.componentConflictId);
+  const pageConflictId = usePagesStore((state) => state.pageConflictId);
+  useEffect(() => {
+    if (!componentConflictId) return;
+    toast.error('This component changed since you opened it — reload to see the latest.', {
+      id: `conflict-component-${componentConflictId}`,
+      duration: Infinity,
+      description: 'Your unsaved edits are still on screen. Reloading replaces them with the current version.',
+      action: { label: 'Reload', onClick: () => window.location.reload() },
+    });
+  }, [componentConflictId]);
+  useEffect(() => {
+    if (!pageConflictId) return;
+    toast.error('This page changed since you opened it — reload to see the latest.', {
+      id: `conflict-page-${pageConflictId}`,
+      duration: Infinity,
+      description: 'Your unsaved edits are still on screen. Reloading replaces them with the current version.',
+      action: { label: 'Reload', onClick: () => window.location.reload() },
+    });
+  }, [pageConflictId]);
   const aiBuildingPageId = useEditorStore((state) => state.aiBuildingPageId);
   const aiBuildingComponentId = useEditorStore((state) => state.aiBuildingComponentId);
   const aiBuildingComponentVariantId = useEditorStore((state) => state.aiBuildingComponentVariantId);

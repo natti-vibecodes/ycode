@@ -8,6 +8,7 @@ import {
   buildWwwAuthenticateHeader,
 } from '@/lib/mcp/handler';
 import { normalizeScopes, type McpScope } from '@/lib/mcp/scopes';
+import type { McpCaller } from '@/lib/mcp/caller';
 import { getBaseUrl } from '@/lib/oauth/metadata';
 
 export const dynamic = 'force-dynamic';
@@ -47,7 +48,7 @@ function unauthorizedWithChallenge(request: NextRequest, message: string): Respo
 /** Returns a denial Response, or the token's scopes (null = unscoped legacy token = full access). */
 async function authorize(
   request: NextRequest,
-): Promise<{ denied: Response } | { scopes: McpScope[] | null }> {
+): Promise<{ denied: Response } | { scopes: McpScope[] | null; caller: McpCaller }> {
   const token = extractBearerToken(request);
   if (!token) {
     return { denied: unauthorizedWithChallenge(request, 'Authorization required') };
@@ -58,13 +59,13 @@ async function authorize(
     return { denied: unauthorizedWithChallenge(request, 'Invalid or expired access token') };
   }
 
-  return { scopes: normalizeScopes(record.scopes) };
+  return { scopes: normalizeScopes(record.scopes), caller: { tokenId: record.id, userId: record.user_id } };
 }
 
 export async function POST(request: NextRequest) {
   const auth = await authorize(request);
   if ('denied' in auth) return auth.denied;
-  return handleMcpPost(request, auth.scopes);
+  return handleMcpPost(request, auth.scopes, auth.caller);
 }
 
 export async function GET(request: NextRequest) {

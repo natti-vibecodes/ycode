@@ -7,6 +7,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { ConflictError } from '@/lib/errors/conflict';
 import {
   displayChangeName,
   sortUnpublishedChanges,
@@ -188,9 +189,27 @@ export async function createComponent(
  * `layers` is provided, `variants[0].layers` is updated in place and the rest
  * of the variants are preserved.
  */
+export interface UpdateComponentOptions {
+  /**
+   * Optimistic-concurrency precondition (SCA-1476): the `content_hash` the caller read before
+   * building `updates`.
+   *
+   * Omit it and the write stays unconditional last-write-wins, which is what every pre-existing
+   * caller relies on. Supply it and the UPDATE carries `.eq('content_hash', base)`, so a row a
+   * concurrent writer has touched matches ZERO rows, nothing is written, and a {@link
+   * ConflictError} is thrown carrying the current component.
+   *
+   * The irony this fixes: `content_hash` was already on the row and already recomputed on every
+   * write — the one field that could have detected the conflict was the field that destroyed the
+   * evidence.
+   */
+  baseContentHash?: string;
+}
+
 export async function updateComponent(
   id: string,
-  updates: Partial<Pick<Component, 'name' | 'layers' | 'variables' | 'variants'>>
+  updates: Partial<Pick<Component, 'name' | 'layers' | 'variables' | 'variants'>>,
+  options?: UpdateComponentOptions
 ): Promise<Component> {
   const client = await getSupabaseAdmin();
   if (!client) {
@@ -201,6 +220,13 @@ export async function updateComponent(
   const current = await getComponentById(id);
   if (!current) {
     throw new Error('Component not found');
+  }
+
+  // Fail fast on an obviously stale base: the row we just read is already past the caller's
+  // version, so there is no point computing a merge or touching translations. The real guard is
+  // still the WHERE clause below — this read cannot close the window on its own.
+  if (options?.baseContentHash !== undefined && current.content_hash !== options.baseContentHash) {
+    throw new ConflictError('component', id, options.baseContentHash, current);
   }
 
   // Reconcile variants and layers so they stay in sync regardless of which one
@@ -250,7 +276,7 @@ export async function updateComponent(
     variants: finalVariants,
   });
 
-  const { data, error } = await client
+  const query = client
     .from('components')
     .update({
       ...(updates.name !== undefined ? { name: updates.name } : {}),
@@ -261,9 +287,28 @@ export async function updateComponent(
       updated_at: new Date().toISOString(),
     })
     .eq('id', id)
-    .eq('is_published', false) // Update draft version only
-    .select()
-    .single();
+    .eq('is_published', false); // Update draft version only
+
+  // WITH a precondition the write is conditional and may legitimately match zero rows, so it
+  // cannot use `.single()` (which errors on an empty result and would hide the conflict behind a
+  // generic 500). Without one, behaviour is byte-for-byte what it was.
+  if (options?.baseContentHash !== undefined) {
+    const { data, error } = await query.eq('content_hash', options.baseContentHash).select();
+
+    if (error) {
+      throw new Error(`Failed to update component: ${error.message}`);
+    }
+
+    const rows = (data as Component[] | null) || [];
+    if (rows.length === 0) {
+      const latest = await getComponentById(id);
+      throw new ConflictError('component', id, options.baseContentHash, latest);
+    }
+
+    return rows[0];
+  }
+
+  const { data, error } = await query.select().single();
 
   if (error) {
     throw new Error(`Failed to update component: ${error.message}`);

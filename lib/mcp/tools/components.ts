@@ -247,7 +247,10 @@ of other components. That check runs here rather than being left to the caller.`
       const instance = buildComponentInstanceLayer(child, { variantId: child_variant_id, customName: custom_name });
       const updatedLayers = insertLayer(layers, parent_layer_id, instance, position);
       const updatedVariants = variants.map((v, i) => (i === targetIdx ? { ...v, layers: updatedLayers } : v));
-      await updateComponent(component_id, { variants: updatedVariants });
+      // Guarded by the hash read at the top of this handler: every MCP component tool is a
+      // read-modify-write, so if the builder saved in between, this write is refused rather
+      // than silently replacing her tree (SCA-1476).
+      await updateComponent(component_id, { variants: updatedVariants }, { baseContentHash: component.content_hash });
       broadcastComponentLayersUpdated(component_id, updatedVariants[0].layers).catch(() => {});
 
       return {
@@ -508,7 +511,10 @@ be included exactly once.`,
       const byId = new Map(variants.map((v) => [v.id, v]));
       const reordered = variant_ids.map((id) => byId.get(id)!) as ComponentVariant[];
 
-      await updateComponent(component_id, { variants: reordered });
+      // Guarded by the hash read at the top of this handler: every MCP component tool is a
+      // read-modify-write, so if the builder saved in between, this write is refused rather
+      // than silently replacing her tree (SCA-1476).
+      await updateComponent(component_id, { variants: reordered }, { baseContentHash: component.content_hash });
       broadcastComponentUpdated(component_id, { variants: reordered }).catch(() => {});
 
       return {
@@ -644,6 +650,9 @@ EXAMPLE: A "Card" component with a title variable:
       if (name !== undefined) updates.name = name;
       if (variables !== undefined) updates.variables = normalizeVariables(variables);
 
+      // Deliberately unconditional: this tool never sends `layers`/`variants`, and
+      // `updateComponent` carries the stored tree forward untouched, so it cannot clobber a
+      // concurrent layer write the way the whole-tree writers can (SCA-1476).
       const component = await updateComponent(component_id, updates);
       broadcastComponentUpdated(component_id, updates).catch(() => {});
 
@@ -731,7 +740,10 @@ EXAMPLE: A "Card" component with a title variable:
       const newVariant: ComponentVariant = { id: generateId(), name, layers };
       const updatedVariants = [...existing, newVariant];
 
-      await updateComponent(component_id, { variants: updatedVariants });
+      // Guarded by the hash read at the top of this handler: every MCP component tool is a
+      // read-modify-write, so if the builder saved in between, this write is refused rather
+      // than silently replacing her tree (SCA-1476).
+      await updateComponent(component_id, { variants: updatedVariants }, { baseContentHash: component.content_hash });
       broadcastComponentUpdated(component_id, { variants: updatedVariants }).catch(() => {});
 
       return {
@@ -774,7 +786,10 @@ EXAMPLE: A "Card" component with a title variable:
       const updatedVariants = [...variants];
       updatedVariants[idx] = { ...updatedVariants[idx], name };
 
-      await updateComponent(component_id, { variants: updatedVariants });
+      // Guarded by the hash read at the top of this handler: every MCP component tool is a
+      // read-modify-write, so if the builder saved in between, this write is refused rather
+      // than silently replacing her tree (SCA-1476).
+      await updateComponent(component_id, { variants: updatedVariants }, { baseContentHash: component.content_hash });
       broadcastComponentUpdated(component_id, { variants: updatedVariants }).catch(() => {});
 
       return { content: [{ type: 'text' as const, text: `Variant "${variant_id}" renamed to "${name}"` }] };
@@ -817,7 +832,10 @@ EXAMPLE: A "Card" component with a title variable:
         };
       }
 
-      await updateComponent(component_id, { variants: updatedVariants });
+      // Guarded by the hash read at the top of this handler: every MCP component tool is a
+      // read-modify-write, so if the builder saved in between, this write is refused rather
+      // than silently replacing her tree (SCA-1476).
+      await updateComponent(component_id, { variants: updatedVariants }, { baseContentHash: component.content_hash });
       broadcastComponentUpdated(component_id, { variants: updatedVariants }).catch(() => {});
 
       return { content: [{ type: 'text' as const, text: `Variant "${variant_id}" deleted` }] };
@@ -1228,7 +1246,10 @@ Pass variant_id to target a specific named variant; omit it to update the primar
       }
 
       const updatedVariants = variants.map((v, i) => (i === targetIdx ? { ...v, layers } : v));
-      await updateComponent(component_id, { variants: updatedVariants });
+      // Guarded by the hash read at the top of this handler: every MCP component tool is a
+      // read-modify-write, so if the builder saved in between, this write is refused rather
+      // than silently replacing her tree (SCA-1476).
+      await updateComponent(component_id, { variants: updatedVariants }, { baseContentHash: component.content_hash });
       broadcastComponentLayersUpdated(component_id, updatedVariants[0].layers).catch(() => {});
 
       // Auto-install any Google Font these ops referenced but never added.
@@ -1281,7 +1302,10 @@ dangling links or orphaned overrides are left behind.`,
         layers: unlinkVariableFromLayers(v.layers ?? [], variable_id),
       }));
 
-      await updateComponent(component_id, { variables: updatedVariables, variants: updatedVariants });
+      // Guarded by the hash read at the top of this handler: every MCP component tool is a
+      // read-modify-write, so if the builder saved in between, this write is refused rather
+      // than silently replacing her tree (SCA-1476).
+      await updateComponent(component_id, { variables: updatedVariables, variants: updatedVariants }, { baseContentHash: component.content_hash });
       broadcastComponentUpdated(component_id, { variables: updatedVariables, variants: updatedVariants }).catch(() => {});
 
       // Sweep pages so instances of this component don't keep overrides that

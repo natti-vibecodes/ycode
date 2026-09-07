@@ -961,6 +961,17 @@ export interface ApiResponse<T> {
   data?: T;
   error?: string;
   message?: string;
+  /**
+   * Set when the server refused the write with HTTP 409 because the caller's optimistic-
+   * concurrency precondition was stale (SCA-1476 / SCA-1480). Nothing was written; `current`
+   * is the row as it exists now, so the caller can reload or merge instead of overwriting.
+   */
+  conflict?: {
+    code: 'conflict';
+    key?: string;
+    expected?: string | null;
+    current?: unknown;
+  };
 }
 
 export interface PaginatedResponse<T> {

@@ -37,6 +37,20 @@ async function apiRequest<T>(
     // Try to parse error message from response body
     try {
       const json = await response.json();
+      if (response.status === 409) {
+        // A refused write, not a failed one. The caller MUST distinguish these: retrying a
+        // conflict with the same stale payload is the clobber the 409 just prevented
+        // (SCA-1476 / SCA-1480).
+        return {
+          error: json.error || 'This changed since you opened it.',
+          conflict: {
+            code: 'conflict',
+            key: json.key,
+            expected: json.expected_updated_at ?? json.expected_content_hash ?? null,
+            current: json.current,
+          },
+        };
+      }
       if (json.error) {
         return { error: json.error };
       }
@@ -170,11 +184,12 @@ export const layersApi = {
     return apiRequest<PageLayers>(`/ycode/api/layers?${params.toString()}`);
   },
 
-  // Update layers for a page
-  async update(pageId: string, layers: Layer[]): Promise<ApiResponse<PageLayers>> {
+  // Update layers for a page. `baseContentHash` is the version the caller loaded — sending it
+  // makes the save conditional, so a concurrent MCP write is never overwritten (SCA-1476).
+  async update(pageId: string, layers: Layer[], baseContentHash?: string): Promise<ApiResponse<PageLayers>> {
     return apiRequest<PageLayers>(`/ycode/api/layers?page_id=${pageId}`, {
       method: 'PUT',
-      body: JSON.stringify({ layers }),
+      body: JSON.stringify({ layers, base_content_hash: baseContentHash }),
     });
   },
 };
@@ -187,8 +202,8 @@ export const pageLayersApi = {
   },
 
   // Update draft layers
-  async updateDraft(pageId: string, layers: Layer[]): Promise<ApiResponse<PageLayers>> {
-    return layersApi.update(pageId, layers);
+  async updateDraft(pageId: string, layers: Layer[], baseContentHash?: string): Promise<ApiResponse<PageLayers>> {
+    return layersApi.update(pageId, layers, baseContentHash);
   },
 
   // Get all draft (non-published) page layers in one query
@@ -811,10 +826,13 @@ export const settingsApi = {
    * Update multiple settings at once (batch upsert)
    * @param settings - Object with key-value pairs to store
    */
-  async batchUpdate(settings: Record<string, any>): Promise<ApiResponse<{ count: number }>> {
-    return apiRequest<{ count: number }>('/ycode/api/settings/batch', {
+  async batchUpdate(
+    settings: Record<string, any>,
+    expectedUpdatedAt?: Record<string, string | null>,
+  ): Promise<ApiResponse<{ count: number; updated_at: Record<string, string> }>> {
+    return apiRequest<{ count: number; updated_at: Record<string, string> }>('/ycode/api/settings/batch', {
       method: 'PUT',
-      body: JSON.stringify({ settings }),
+      body: JSON.stringify({ settings, expected_updated_at: expectedUpdatedAt }),
     });
   },
 };

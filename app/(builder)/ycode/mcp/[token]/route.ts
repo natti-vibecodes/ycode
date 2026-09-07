@@ -32,7 +32,8 @@ export async function POST(
   }
   // The token's scopes decide which tool groups this session even sees (SCA-1233).
   // NULL scopes means an unscoped legacy token: full access, unchanged.
-  return handleMcpPost(request, normalizeScopes(record.scopes));
+  // Identity rides alongside the scopes so settings writes can name their writer (SCA-1480).
+  return handleMcpPost(request, normalizeScopes(record.scopes), { tokenId: record.id, userId: record.user_id });
 }
 
 export async function GET(

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isAgentSecretSettingKey } from '@/lib/agent/config';
-import { getSettingByKey } from '@/lib/repositories/settingsRepository';
+import { getSettingRecordByKey } from '@/lib/repositories/settingsRepository';
 import { setSettingAndInvalidate } from '@/lib/services/settingsService';
+import { isConflictError } from '@/lib/errors/conflict';
 
 /**
  * GET /ycode/api/settings/[key]
@@ -22,16 +23,18 @@ export async function GET(
       );
     }
 
-    const value = await getSettingByKey(key);
+    const record = await getSettingRecordByKey(key);
 
-    if (value === null) {
+    if (record === null || record.value === null) {
       return NextResponse.json(
         { error: 'Setting not found' },
         { status: 404 }
       );
     }
 
-    return NextResponse.json({ data: value });
+    // `updated_at` is the concurrency token: a client that reads here can write back with
+    // `expected_updated_at` and be refused rather than clobber (SCA-1480).
+    return NextResponse.json({ data: record.value, updated_at: record.updated_at ?? null });
   } catch (error) {
     console.error('[API] Error fetching setting:', error);
     return NextResponse.json(
@@ -53,7 +56,7 @@ export async function PUT(
   try {
     const { key } = await params;
     const body = await request.json();
-    const { value } = body;
+    const { value, expected_updated_at: expectedUpdatedAt } = body;
 
     if (value === undefined) {
       return NextResponse.json(
@@ -65,13 +68,29 @@ export async function PUT(
     // Writes, then purges the public cache for render-affecting keys and warms the routes back
     // up. Shared with the MCP `set_setting` tool (SCA-1345) — this logic living only here is
     // exactly why agent-written settings never invalidated anything.
-    await setSettingAndInvalidate(key, value, request);
+    const saved = await setSettingAndInvalidate(key, value, request, {
+      // Absent precondition = unconditional write, exactly as before. Present and stale = 409.
+      expectedUpdatedAt,
+      caller: 'route:PUT /ycode/api/settings/[key]',
+    });
 
     return NextResponse.json({
-      data: { key, value },
+      data: { key, value, updated_at: saved?.updated_at ?? null },
       message: 'Setting updated successfully',
     });
   } catch (error) {
+    if (isConflictError(error)) {
+      // 409 with the CURRENT row: nothing was written, and the caller can diff before retrying.
+      return NextResponse.json(
+        {
+          error: error.message,
+          code: 'conflict',
+          expected_updated_at: error.expected,
+          current: error.current,
+        },
+        { status: 409 }
+      );
+    }
     console.error('[API] Error updating setting:', error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to update setting' },
