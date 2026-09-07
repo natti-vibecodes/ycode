@@ -53,18 +53,32 @@ const CLAUSES: Record<string, string> = {
 
 export async function up(knex: Knex): Promise<void> {
   for (const [cmd, clause] of Object.entries(CLAUSES)) {
+    // `cmd` is INTERPOLATED, not bound. A `?` here binds nothing: the placeholder lands
+    // INSIDE the dollar-quoted DO body, so Postgres sees a statement with zero parameters
+    // while node-postgres supplies one — `08P01: bind message supplies 1 parameters, but
+    // prepared statement "" requires 0`. That made this migration unrunnable through knex
+    // (found 2026-09-07 by actually replaying up(); it is why these were applied by hand and
+    // the ledger drifted). The value is a literal key of CLAUSES above, never user input.
     await knex.raw(
       `do $$
        declare p record;
        begin
          for p in select policyname from pg_policies
-                   where schemaname = 'storage' and tablename = 'objects' and cmd = ?
+                   where schemaname = 'storage' and tablename = 'objects' and cmd = '${cmd}'
                      and coalesce(qual, '') || coalesce(with_check, '') like '%assets%'
          loop
            execute format('drop policy %I on storage.objects', p.policyname);
          end loop;
        end $$;`,
-      [cmd],
+    );
+
+    // Belt and braces for a RE-RUN (SCA-1474 round 3). The enumeration above already
+    // matches this migration's own replacement — its predicate mentions `assets` — but
+    // that is an inference about a LIKE pattern, not a guarantee. An explicit drop makes
+    // `up()` idempotent on its own terms, so re-applying after the ledger repair is a
+    // no-op rather than a duplicate-name error.
+    await knex.raw(
+      `drop policy if exists "assets_${cmd.toLowerCase()}_members" on storage.objects;`,
     );
 
     await knex.raw(
@@ -81,6 +95,11 @@ export async function down(knex: Knex): Promise<void> {
     );
   }
   // Behaviour AND names restored verbatim from the pre-migration census.
+  await knex.raw(`
+    drop policy if exists "Authenticated users can upload assets" on storage.objects;
+    drop policy if exists "Authenticated users can update assets" on storage.objects;
+    drop policy if exists "Authenticated users can delete assets" on storage.objects;
+  `);
   await knex.raw(`
     create policy "Authenticated users can upload assets" on storage.objects
       for insert to public

@@ -13,37 +13,10 @@ import 'server-only';
 import fs from 'fs/promises';
 import path from 'path';
 import type { SupabaseConfig } from '@/types';
+import { getSupabaseConfigFromEnv } from '@/lib/supabase-env-config';
 
 const ENV_FILE = path.join(process.cwd(), '.env');
 const IS_VERCEL = process.env.VERCEL === '1';
-
-/**
- * Read Supabase config from environment variables.
- * Supports both new (SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY) and legacy
- * (SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY) variable names.
- *
- * SUPABASE_URL is optional — required for self-hosted Supabase instances.
- * When omitted, the API URL is derived from the project ref in the connection string.
- */
-function getSupabaseConfigFromEnv(): SupabaseConfig | null {
-  const anonKey = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY;
-  const secretKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const connectionUrl = process.env.SUPABASE_CONNECTION_URL;
-  const dbPassword = process.env.SUPABASE_DB_PASSWORD;
-  const supabaseUrl = process.env.SUPABASE_URL;
-
-  if (anonKey && secretKey && connectionUrl && dbPassword) {
-    return {
-      anonKey,
-      serviceRoleKey: secretKey,
-      connectionUrl,
-      dbPassword,
-      ...(supabaseUrl ? { supabaseUrl } : {}),
-    };
-  }
-
-  return null;
-}
 
 /**
  * Get a value from storage (reads from environment variables).
