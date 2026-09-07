@@ -8,6 +8,7 @@ import HreflangAlternateLinks from '@/components/HreflangAlternateLinks';
 import LayerRendererPublic from '@/components/LayerRendererPublic';
 import SliderInitializer from '@/components/SliderInitializer';
 import LightboxInitializer from '@/components/LightboxInitializer';
+import VideoAutoplayInitializer from '@/components/VideoAutoplayInitializer';
 import PasswordForm from '@/components/PasswordForm';
 import YcodeBadge from '@/components/YcodeBadge';
 import { unstable_cache } from 'next/cache';
@@ -28,6 +29,7 @@ import { getValuesByItemIds } from '@/lib/repositories/collectionItemValueReposi
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
 import { REF_PAGE_PREFIX, REF_COLLECTION_PREFIX, isCollectionItemKeyword, parseCollectionLinkValue } from '@/lib/link-utils';
 import { getClassesString, hasPasswordFormLayer } from '@/lib/layer-utils';
+import { treeHasDeferredAutoplayVideo } from '@/lib/video-autoplay';
 import { buildGlobalsMetaMap, buildGlobalsValueMap } from '@/lib/collection-field-utils';
 import { buildLocalizedPageUrls, type LocalizedDynamicSlug } from '@/lib/page-utils';
 import { getTranslatableKey, slimTranslations } from '@/lib/locale-runtime';
@@ -312,6 +314,24 @@ function hasSliderLayers(layers: Layer[]): boolean {
 /** Check if any layer in the tree (including rich-text-embedded components) is a lightbox */
 function hasLightboxLayers(layers: Layer[]): boolean {
   return layerTreeHasLayer(layers, layer => layer.name === 'lightbox');
+}
+
+/**
+ * Does this page render a video whose autoplay was deferred (SCA-1468)? Used to skip shipping
+ * VideoAutoplayInitializer to pages with no video at all.
+ *
+ * Component MASTERS are scanned as well as the page tree, because a component instance carries
+ * no children in the page tree — the reel video on /services/design-branding lives inside one,
+ * and a page-tree-only scan (the shape `hasSliderLayers` uses) would leave it permanently
+ * paused. Scanning every component the page was given is a deliberate superset: mounting the
+ * driver for a video that is not on the page costs one querySelectorAll that matches nothing,
+ * while missing one costs a video that never plays.
+ */
+function hasDeferredAutoplayVideo(layers: Layer[], components: Component[]): boolean {
+  if (treeHasDeferredAutoplayVideo(layers)) return true;
+  return components.some(component =>
+    treeHasDeferredAutoplayVideo(component.layers)
+    || (component.variants || []).some(variant => treeHasDeferredAutoplayVideo(variant.layers)));
 }
 
 /**
@@ -1036,6 +1056,10 @@ export default async function PageRenderer({
 
       {/* Initialize lightbox modals */}
       {hasLightboxLayers(resolvedLayers) && <LightboxInitializer />}
+
+      {/* SCA-1468: start deferred-autoplay videos once they are actually visible. The markup
+          carries no `autoplay`, so without this a marked video never plays. */}
+      {hasDeferredAutoplayVideo(resolvedLayers, components) && <VideoAutoplayInitializer />}
 
       {/* Report content height to parent for zoom calculations (preview only) */}
       {!page.is_published && <ContentHeightReporter />}
