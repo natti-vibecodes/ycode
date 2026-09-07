@@ -306,3 +306,61 @@ describe('comments cannot break the walk (SCA-1369 regression)', () => {
     assert.equal(out.bodyEnd, '');
   });
 });
+
+/**
+ * SCA-1458 (the same root cause as the head parser, in the other custom-code reader).
+ *
+ * The top-level walk skips comments, but `findElementEnd` — which decides where an element ENDS
+ * by counting same-name open/close tags — did not. A comment INSIDE a mounted element therefore
+ * still contributed to the depth count, in both directions:
+ *
+ *   - a commented-out closing tag ended the element early, so the routed chunk was truncated and
+ *     the leftover `</div>` was pushed into `rest` as unbalanced markup;
+ *   - a commented-out OPENING tag pushed the depth up by one, no matching close was ever found,
+ *     the unclosed-element guard fired and the walk abandoned everything from that point — the
+ *     exact silent-inert failure SCA-1369 was about.
+ *
+ * The house comment style in nav.html and the footer quotes tags in prose, so this family keeps
+ * being authored.
+ */
+describe('comments inside a mounted element do not move its boundary (SCA-1458)', () => {
+  test('REGRESSION: a commented-out CLOSING tag does not end the element early', () => {
+    const html = `<div class="navwrap" data-ycode-mount="body-start">`
+      + `<!-- the old hoist script ran here and then closed the wrapper: </div> -->`
+      + `<nav>n</nav></div>`;
+    const out = splitCustomCodeByMount(html);
+    assert.equal(out.bodyStart, html, 'the whole element routes, comment included');
+    assert.equal(out.rest, '', 'nothing is left behind as unbalanced markup');
+  });
+
+  test('REGRESSION: a commented-out OPENING tag does not make the element look unclosed', () => {
+    const html = `<footer data-ycode-mount="body-end">`
+      + `<!-- example markup: <footer class="alt"> -->`
+      + `<p>&copy; 2026</p></footer>`;
+    const out = splitCustomCodeByMount(html);
+    assert.equal(out.bodyEnd, html, 'the footer still routes to body-end');
+    assert.equal(out.rest, '', 'the walk did not abandon the scan');
+  });
+
+  test('a comment inside a NON-mounted element does not shift the elements after it', () => {
+    const html = `<section><!-- </section> --><p>a</p></section>`
+      + `<footer data-ycode-mount="body-end">f</footer>`;
+    const out = splitCustomCodeByMount(html);
+    assert.equal(out.bodyEnd, '<footer data-ycode-mount="body-end">f</footer>');
+    assert.equal(out.rest, '<section><!-- </section> --><p>a</p></section>');
+  });
+
+  test('real nesting is still counted — the fix must not defeat depth tracking', () => {
+    const html = `<div data-ycode-mount="body-start"><div class="inner">x</div></div><p>after</p>`;
+    const out = splitCustomCodeByMount(html);
+    assert.equal(out.bodyStart, '<div data-ycode-mount="body-start"><div class="inner">x</div></div>');
+    assert.equal(out.rest, '<p>after</p>');
+  });
+
+  test('an unterminated comment inside an element still leaves the remainder as authored', () => {
+    const html = `<div data-ycode-mount="body-start"><!-- never closed </div>`;
+    const out = splitCustomCodeByMount(html);
+    assert.equal(out.bodyStart, '');
+    assert.equal(out.rest, html);
+  });
+});

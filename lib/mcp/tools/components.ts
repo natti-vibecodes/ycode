@@ -913,9 +913,10 @@ Pass variant_id to target a specific named variant; omit it to update the primar
           type: z.literal('update_settings'),
           layer_id: z.string().describe('Layer ID or ref_id'),
           tag: z.string().optional().describe('HTML tag override: h1-h6, p, span, div, section, form, input, etc.'),
-          html_id: z.string().optional().describe('Custom HTML element id'),
+          html_id: z.string().optional()
+            .describe('Custom HTML element id (for anchor links, CSS targeting). Stored as `settings.id`, the field the renderer emits — the same field `form_id` writes, because on a form layer the element id IS the submission group id. Passing both with different values is rejected rather than silently resolved.'),
           form_id: z.string().optional()
-            .describe('For form layers: the id submissions are grouped under in the Forms screen.'),
+            .describe('For form layers: the id submissions are grouped under in the Forms screen. Same underlying field as `html_id` (`settings.id`).'),
           custom_attributes: z.record(z.string(), z.string()).optional()
             .describe('Custom HTML attributes as { name: value }. REPLACES the existing map, so pass every attribute you want kept (including class). Wins over `attributes` on collision.'),
           attributes: z.record(z.string(), z.string().nullable()).optional()
@@ -1139,11 +1140,36 @@ Pass variant_id to target a specific named variant; omit it to update the primar
               const layerId = refMap.get(op.layer_id) || op.layer_id;
               const layer = findLayerById(layers, layerId);
               if (!layer) { results.push({ op: i, status: 'error', detail: `Layer "${op.layer_id}" not found` }); continue; }
+              // `html_id` and `form_id` are ONE field. On a form layer the renderer reads
+              // `settings.id` as both the element id and the submissions group id
+              // (LayerRendererPublic: `elementProps.id = layer.settings.id` and
+              // `const formId = layer.settings?.id`). Two different values cannot both be
+              // honoured, so say so instead of letting write order decide (SCA-1459).
+              if (op.html_id !== undefined && op.form_id !== undefined && op.html_id !== op.form_id) {
+                results.push({
+                  op: i,
+                  status: 'error',
+                  detail: `html_id "${op.html_id}" and form_id "${op.form_id}" both write settings.id — pass one`,
+                });
+                continue;
+              }
               layers = updateLayerById(layers, layerId, (l) => {
                 const settings = { ...(l.settings ?? {}) } as Record<string, unknown>;
                 if (op.tag !== undefined) settings.tag = op.tag;
-                if (op.html_id !== undefined) settings.html_id = op.html_id;
+                // SCA-1459: this wrote `settings.html_id`, a key with one writer and ZERO readers
+                // anywhere in the fork — so the op reported `ok`, a readback showed the value
+                // present, and the element's id never moved. Measured on the live workspace:
+                // three honeypot inputs carried `settings.html_id` alongside `settings.id:
+                // "input"`, and the ids that actually rendered came from the `custom_attributes`
+                // workaround. `settings.id` is what the renderer emits, and it is what the
+                // page-scoped `update_layer_settings` has always written.
+                if (op.html_id !== undefined) settings.id = op.html_id;
                 if (op.form_id !== undefined) settings.id = op.form_id;
+                // Clear the orphan key this op used to write, so a layer repaired here stops
+                // carrying a value that looks set and does nothing.
+                if ((op.html_id !== undefined || op.form_id !== undefined) && 'html_id' in settings) {
+                  delete settings.html_id;
+                }
                 // custom_attributes REPLACES. That was originally described as "matching
                 // update_layer_settings on pages", and SCA-1348 made that untrue — pages now
                 // merge and accept null to delete a key. The two are left deliberately different
