@@ -2,6 +2,7 @@ import { revalidateTag, revalidatePath } from 'next/cache';
 import { invalidateByTag } from '@vercel/functions';
 import { getSupabaseAdmin, getSupabaseConfig } from '@/lib/supabase-server';
 import { buildSlugPath, normalizeSlugSegment } from '@/lib/page-utils';
+import { collectSlugFieldIds, pickSlugFieldId } from '@/lib/cms-slug-field';
 import type { Page, PageFolder } from '@/types';
 import type {
   ChangedLocale,
@@ -250,6 +251,41 @@ export async function getRoutePathsForPages(pageIds: string[]): Promise<string[]
 }
 
 /**
+ * Resolve the collection field that supplies a dynamic page's URL slug.
+ *
+ * SCA-1486. This used to be a single `.eq('key', 'slug')` lookup, and in this workspace
+ * `collection_fields.key` is NULL on EVERY row — 70 of 70 on Insights, 36 of 36 on Case Studies,
+ * measured 2026-09-07. So the lookup matched nothing, `resolveDynamicPageRoutes` bailed with
+ * `continue`, and every dynamic page expanded to ZERO routes: publishing the `insight-article`
+ * template invalidated none of its 113 `/insight/<slug>` pages, and `getAllPublishedRoutes()`
+ * warmed none of them either. The symptom was a template publish that visibly did nothing while
+ * `/dynamic/insight/<slug>` showed the new template — i.e. the publish was fine, the purge was
+ * empty. CLAUDE.md already carried the underlying trap ("CMS field `key` is NULL on every field
+ * in this workspace — match fields by `name`"), from llms.txt shipping a description on 0 of 109
+ * articles for the same reason.
+ *
+ * The page's own `settings.cms.slug_field_id` is the authority: it is what the builder writes
+ * when the dynamic page is bound, and what `sitemap.xml` and `llms.txt` already read to build
+ * the very same URLs. Draft and published field rows share an id, so one id serves both.
+ * The key/name scan stays as a fallback for pages bound before that setting existed.
+ */
+async function resolveSlugFieldId(
+  client: SupabaseAdmin,
+  collectionId: string,
+  configuredSlugFieldId: string | undefined,
+): Promise<string | null> {
+  if (configuredSlugFieldId) return configuredSlugFieldId;
+
+  const { data: fields } = await client
+    .from('collection_fields')
+    .select('id, key, name')
+    .eq('collection_id', collectionId)
+    .is('deleted_at', null);
+
+  return pickSlugFieldId(fields ?? [], null);
+}
+
+/**
  * Enumerate all published instance URLs for dynamic (CMS-driven) pages.
  * Each dynamic page is bound to a collection; we look up the slug field
  * values of published items to build the real URL paths.
@@ -264,19 +300,12 @@ async function resolveDynamicPageRoutes(
   const routes: string[] = [];
 
   for (const page of dynamicPages) {
-    const collectionId = (page.settings as any)?.cms?.collection_id;
+    const cms = (page.settings as any)?.cms;
+    const collectionId = cms?.collection_id;
     if (!collectionId) continue;
 
-    const { data: slugField } = await client
-      .from('collection_fields')
-      .select('id')
-      .eq('collection_id', collectionId)
-      .eq('key', 'slug')
-      .is('deleted_at', null)
-      .limit(1)
-      .single();
-
-    if (!slugField) continue;
+    const slugFieldId = await resolveSlugFieldId(client, collectionId, cms?.slug_field_id);
+    if (!slugFieldId) continue;
 
     const { data: items } = await client
       .from('collection_items')
@@ -293,7 +322,7 @@ async function resolveDynamicPageRoutes(
       const { data } = await client
         .from('collection_item_values')
         .select('item_id, value')
-        .eq('field_id', slugField.id)
+        .eq('field_id', slugFieldId)
         .eq('is_published', true)
         .is('deleted_at', null)
         .in('item_id', idChunk);
@@ -383,22 +412,30 @@ export async function getRoutePathsForDeletedCollectionItems(
   // Translated slugs are keyed by item id, but callers only pass default slug
   // values. Map each old slug back to its item id (draft rows survive unpublish,
   // so they still resolve) to look up per-locale translated slugs.
+  //
+  // The slug field is resolved through the same rule as everywhere else (SCA-1486): the dynamic
+  // page's own `settings.cms.slug_field_id` first, then key, then name. Keying on `key` alone
+  // resolved nothing here, so a deleted item's old URL was never purged and the CDN kept serving
+  // it as a 200.
+  const configuredSlugFieldByCollection = new Map<string, string>();
+  for (const page of dynamicPages as Page[]) {
+    const cms = (page.settings as any)?.cms;
+    if (cms?.collection_id && cms?.slug_field_id) {
+      configuredSlugFieldByCollection.set(cms.collection_id, cms.slug_field_id);
+    }
+  }
+
   const slugToItemIdByCollection = new Map<string, Map<string, string>>();
   for (const [collectionId, slugs] of deletedSlugs) {
     if (!slugs || slugs.length === 0) continue;
-    const { data: slugField } = await client
-      .from('collection_fields')
-      .select('id')
-      .eq('collection_id', collectionId)
-      .eq('key', 'slug')
-      .is('deleted_at', null)
-      .limit(1)
-      .single();
-    if (!slugField) continue;
+    const slugFieldId = await resolveSlugFieldId(
+      client, collectionId, configuredSlugFieldByCollection.get(collectionId),
+    );
+    if (!slugFieldId) continue;
     const { data: values } = await client
       .from('collection_item_values')
       .select('item_id, value')
-      .eq('field_id', slugField.id)
+      .eq('field_id', slugFieldId)
       .is('deleted_at', null)
       .in('value', slugs);
     const map = new Map<string, string>();
@@ -854,7 +891,7 @@ async function loadCurrentLocalisationState(): Promise<CurrentLocalisationState 
       .eq('is_published', true).is('deleted_at', null)
       .in('content_key', ['slug', 'field:key:slug']),
     client.from('collection_items').select('id, collection_id').eq('is_published', true).is('deleted_at', null),
-    client.from('collection_fields').select('id, collection_id, key').eq('key', 'slug').is('deleted_at', null),
+    client.from('collection_fields').select('id, collection_id, key, name').is('deleted_at', null),
     client.from('collection_item_values').select('item_id, field_id, value').eq('is_published', true).is('deleted_at', null),
   ]);
 
@@ -882,7 +919,13 @@ async function loadCurrentLocalisationState(): Promise<CurrentLocalisationState 
     target.get(t.locale_id)!.set(t.source_id, t.content_value);
   }
 
-  const slugFieldIds = new Set((collectionFields || []).map((f) => f.id));
+  // SCA-1486: `.eq('key','slug')` matched nothing here (every field's `key` is NULL), so this set
+  // was EMPTY and no CMS locale route could be reconstructed. Resolve through the shared rule,
+  // seeded with each dynamic page's configured `slug_field_id`.
+  const slugFieldIds = collectSlugFieldIds(
+    collectionFields || [],
+    (pages as Page[]).map((p) => ((p.settings as any)?.cms ?? {})),
+  );
   const itemSlugByItemId = new Map<string, string>();
   for (const v of collectionItemValues || []) {
     if (slugFieldIds.has(v.field_id) && typeof v.value === 'string' && v.value) {
