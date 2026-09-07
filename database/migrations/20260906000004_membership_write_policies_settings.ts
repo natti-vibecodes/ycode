@@ -48,17 +48,22 @@ export async function up(knex: Knex): Promise<void> {
   `);
 
   for (const [cmd, clause] of Object.entries(CLAUSES)) {
+    // `cmd` is INTERPOLATED, not bound. A `?` here binds nothing: the placeholder lands
+    // INSIDE the dollar-quoted DO body, so Postgres sees a statement with zero parameters
+    // while node-postgres supplies one — `08P01: bind message supplies 1 parameters, but
+    // prepared statement "" requires 0`. That made this migration unrunnable through knex
+    // (found 2026-09-07 by actually replaying up(); it is why these were applied by hand and
+    // the ledger drifted). The value is a literal key of CLAUSES above, never user input.
     await knex.raw(
       `do $$
        declare p record;
        begin
          for p in select policyname from pg_policies
-                   where schemaname = 'public' and tablename = 'settings' and cmd = ?
+                   where schemaname = 'public' and tablename = 'settings' and cmd = '${cmd}'
          loop
            execute format('drop policy %I on public.settings', p.policyname);
          end loop;
        end $$;`,
-      [cmd],
     );
 
     // `(select public.is_workspace_member())` — the subselect makes Postgres

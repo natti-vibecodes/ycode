@@ -1,8 +1,25 @@
 import type { Knex } from 'knex';
 import path from 'path';
-import { credentials } from './lib/credentials.ts';
+import { getSupabaseConfigFromEnv } from './lib/supabase-env-config.ts';
 import { parseSupabaseConfig } from './lib/supabase-config-parser.ts';
-import type { SupabaseConfig } from './types/index.ts';
+
+/**
+ * The knex CLI is not Next: nothing has loaded `.env` for us, and `lib/credentials.ts`
+ * is `server-only` (it owns the fs WRITE path), so importing it here threw before any
+ * connection was attempted and killed every `migrate:*` script. Read the environment
+ * through the shared, guard-free reader instead, and load `.env` ourselves.
+ *
+ * `process.loadEnvFile` exists from Node 20.12; this package requires >= 20.9, so the
+ * call is feature-detected rather than assumed. Real env vars (Vercel, CI) already
+ * present are not overwritten — loadEnvFile does not clobber existing keys.
+ */
+if (typeof process.loadEnvFile === 'function') {
+  try {
+    process.loadEnvFile(path.join(process.cwd(), '.env'));
+  } catch {
+    // No .env (Vercel, CI) — the environment is expected to carry the vars directly.
+  }
+}
 
 /**
  * Knex Configuration for Ycode Supabase Migrations
@@ -16,7 +33,7 @@ import type { SupabaseConfig } from './types/index.ts';
  * Uses environment variables on Vercel, file-based storage locally
  */
 async function getSupabaseConnectionParams() {
-  const config = await credentials.get<SupabaseConfig>('supabase_config');
+  const config = getSupabaseConfigFromEnv();
 
   if (!config?.connectionUrl || !config?.dbPassword) {
     throw new Error('Supabase not configured. Please run setup first.');
