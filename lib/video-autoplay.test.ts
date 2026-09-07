@@ -33,7 +33,7 @@ import {
   DEFER_ATTR,
   isDeferredAutoplayLayer,
   readLayerFlag,
-  resolveDeferredPreload,
+  resolveVideoPreload,
   treeHasDeferredAutoplayVideo,
 } from './video-autoplay';
 
@@ -117,15 +117,60 @@ describe('SCA-1468 public renderer: an autoplay video ships in deferred form', (
     assert.equal(attrs.preload, 'none', 'a poster already paints; metadata would buy nothing');
   });
 
-  test('above the fold with NO poster keeps preload="metadata" for a first frame', () => {
-    const attrs = renderPublic(videoLayer({ attributes: { [ABOVE_FOLD_ATTR]: true } }));
-    assert.equal(attrs.preload, 'metadata');
-    assert.equal(attrs.autoplay, undefined, 'above-the-fold is a preload decision, never an autoplay one');
+  test('the marker is reachable through customAttributes, the only carrier the MCP can write', () => {
+    const attrs = renderPublic({
+      id: 'vid-1',
+      name: 'video',
+      settings: { customAttributes: { autoplay: 'true' } },
+      variables: { video: { src: { type: 'dynamic_text', data: { content: 'https://example.test/reel.mp4' } } } },
+    });
+    assert.equal(attrs[AUTOPLAY_MARKER_ATTR], '1');
+    assert.equal(attrs.autoplay, undefined);
+  });
+});
+
+describe('SCA-1468 public renderer: the fork owns `preload` on EVERY video', () => {
+  /**
+   * This is the population the measurement actually found. Not one video layer on
+   * /services/design-branding carries `autoplay` — the chrome's visibility gate is what plays
+   * them — and they still pulled 6.85 MB before any scroll, purely from a baked `preload`. A
+   * fix keyed on autoplay alone would have measured a clean zero against an empty population.
+   */
+  function noAutoplayLayer(attributes: AnyLayer, extra: AnyLayer = {}): AnyLayer {
+    return {
+      id: 'vid-2',
+      name: 'video',
+      attributes: { loop: true, muted: true, ...attributes },
+      variables: { video: { src: { type: 'dynamic_text', data: { content: 'https://example.test/reel.mp4' } } } },
+      ...extra,
+    };
+  }
+
+  test('BEFORE-FAIL: `preload="auto"` on a video with NO autoplay is overridden to "none"', () => {
+    // The exact shape of `.grow-video`: no autoplay, no muted, preload="auto", 1751 px down.
+    const attrs = renderPublic(noAutoplayLayer({ preload: 'auto' }));
+    assert.equal(attrs.preload, 'none');
+    assert.equal(attrs[AUTOPLAY_MARKER_ATTR], undefined, 'no autoplay intent to carry');
   });
 
-  test('above the fold WITH a poster stays at preload="none"', () => {
-    const attrs = renderPublic(videoLayer({
-      attributes: { [ABOVE_FOLD_ATTR]: true },
+  test('BEFORE-FAIL: `preload="metadata"` is overridden too — the two hub videos', () => {
+    const attrs = renderPublic(noAutoplayLayer({ preload: 'metadata' }));
+    assert.equal(attrs.preload, 'none');
+  });
+
+  test('BEFORE-FAIL: a video with no preload at all gets an explicit "none"', () => {
+    // The UA default is metadata-or-auto, so saying nothing is not the same as saying none.
+    const attrs = renderPublic(noAutoplayLayer({}));
+    assert.equal(attrs.preload, 'none');
+  });
+
+  test('above the fold with NO poster gets preload="metadata" for a first frame', () => {
+    const attrs = renderPublic(noAutoplayLayer({ [ABOVE_FOLD_ATTR]: true }));
+    assert.equal(attrs.preload, 'metadata');
+  });
+
+  test('above the fold WITH a poster stays at "none" — the poster already paints', () => {
+    const attrs = renderPublic(noAutoplayLayer({ [ABOVE_FOLD_ATTR]: true }, {
       variables: {
         video: {
           src: { type: 'dynamic_text', data: { content: 'https://example.test/reel.mp4' } },
@@ -134,27 +179,34 @@ describe('SCA-1468 public renderer: an autoplay video ships in deferred form', (
       },
     }));
     assert.equal(attrs.preload, 'none');
+    assert.equal(attrs.poster, 'https://example.test/poster.jpg');
   });
 
-  test('the settings are reachable through customAttributes, the only carrier the MCP can write', () => {
-    const attrs = renderPublic(videoLayer({
+  test('above the fold, the author\'s own preload is honoured — that is the escape hatch', () => {
+    const attrs = renderPublic(noAutoplayLayer({ [ABOVE_FOLD_ATTR]: true, preload: 'auto' }));
+    assert.equal(attrs.preload, 'auto');
+  });
+
+  test('the escape hatch is reachable through customAttributes', () => {
+    const attrs = renderPublic(noAutoplayLayer({ preload: 'auto' }, {
       settings: { customAttributes: { [ABOVE_FOLD_ATTR]: 'true' } },
     }));
+    assert.equal(attrs.preload, 'auto');
+  });
+
+  test('a nonsense preload value is treated as unset rather than passed through', () => {
+    const attrs = renderPublic(noAutoplayLayer({ [ABOVE_FOLD_ATTR]: true, preload: 'yes-please' }));
     assert.equal(attrs.preload, 'metadata');
   });
 });
 
 describe('SCA-1468 public renderer: what deferral must NOT touch', () => {
-  test('opting out restores eager autoplay and leaves the author\'s preload alone', () => {
-    const attrs = renderPublic(videoLayer({ attributes: { preload: 'auto', [DEFER_ATTR]: false } }));
+  test('opting out of deferral restores the `autoplay` + play() path', () => {
+    const attrs = renderPublic(videoLayer({
+      attributes: { preload: 'auto', [ABOVE_FOLD_ATTR]: true, [DEFER_ATTR]: false },
+    }));
     assert.equal(attrs[AUTOPLAY_MARKER_ATTR], undefined);
-    assert.equal(attrs.preload, 'auto');
-  });
-
-  test('SCOPE GUARD: a video with no autoplay is rendered exactly as before', () => {
-    const attrs = renderPublic(videoLayer({ attributes: { autoplay: false, preload: 'metadata' } }));
-    assert.equal(attrs[AUTOPLAY_MARKER_ATTR], undefined, 'nothing to defer, so nothing to mark');
-    assert.equal(attrs.preload, 'metadata', 'a non-autoplay preload is the author\'s call and stays');
+    assert.equal(attrs.preload, 'auto', 'an above-fold layer keeps its authored preload');
   });
 
   test('SCOPE GUARD: <audio autoplay> is untouched — it has no visibility to key on', () => {
@@ -197,11 +249,13 @@ describe('SCA-1468 the decision helpers', () => {
     assert.equal(readLayerFlag({ attributes: { flag: 'maybe' } }, 'flag', true), true, 'garbage falls back');
   });
 
-  test('preload resolves from the poster and the above-fold setting, never from tree position', () => {
+  test('preload resolves from the above-fold setting and the poster, never from tree position', () => {
     const above = { attributes: { [ABOVE_FOLD_ATTR]: true } };
-    assert.equal(resolveDeferredPreload(above, { hasPoster: false }), 'metadata');
-    assert.equal(resolveDeferredPreload(above, { hasPoster: true }), 'none');
-    assert.equal(resolveDeferredPreload({}, { hasPoster: false }), 'none');
+    assert.equal(resolveVideoPreload(above, { hasPoster: false }), 'metadata');
+    assert.equal(resolveVideoPreload(above, { hasPoster: true }), 'none');
+    assert.equal(resolveVideoPreload({}, { hasPoster: false }), 'none');
+    assert.equal(resolveVideoPreload({ attributes: { preload: 'auto' } }, { hasPoster: false }), 'none',
+      'below the fold, an authored "auto" is exactly what must not be honoured');
   });
 });
 
