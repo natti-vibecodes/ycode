@@ -20,6 +20,8 @@
  * ignored: moving an element out of its parent is exactly the DOM surgery this removes.
  */
 
+import { commentRanges, isInsideComment, type CommentRange } from '@/lib/html-tokenizer';
+
 export const MOUNT_ATTR = 'data-ycode-mount';
 export type MountPoint = 'body-start' | 'body-end' | 'before-layers';
 
@@ -65,21 +67,35 @@ export interface SplitCustomCode {
  * Find the end index of the element starting at `openStart`, by counting same-name tags.
  * Returns -1 when the element is never closed, in which case the caller leaves it alone —
  * malformed custom code should render exactly as before, not silently lose a chunk.
+ *
+ * Tags inside an HTML COMMENT do not count (SCA-1458). The top-level walk below already skips
+ * comments; this did not, so a comment INSIDE a mounted element moved its boundary — a
+ * commented-out `</div>` truncated the routed chunk and pushed unbalanced markup into `rest`,
+ * and a commented-out `<div>` pushed the depth up with no matching close, so the unclosed guard
+ * fired and the walk abandoned the rest of the file. The house comment style quotes tags in
+ * prose, so this family keeps being authored.
  */
-function findElementEnd(html: string, openStart: number, tag: string): number {
+function findElementEnd(html: string, openStart: number, tag: string, comments: readonly CommentRange[]): number {
   if (VOID_TAGS.has(tag)) {
     const gt = html.indexOf('>', openStart);
     return gt === -1 ? -1 : gt + 1;
   }
   const open = new RegExp(`<${tag}\\b`, 'gi');
   const close = new RegExp(`</${tag}\\s*>`, 'gi');
+  /** Advance `re` past any hit that sits inside a comment. */
+  const nextReal = (re: RegExp, from: number): RegExpExecArray | null => {
+    re.lastIndex = from;
+    for (;;) {
+      const hit = re.exec(html);
+      if (!hit) return null;
+      if (!isInsideComment(comments, hit.index)) return hit;
+    }
+  };
   let depth = 0;
   let cursor = openStart;
   for (;;) {
-    open.lastIndex = cursor;
-    close.lastIndex = cursor;
-    const nextOpen = open.exec(html);
-    const nextClose = close.exec(html);
+    const nextOpen = nextReal(open, cursor);
+    const nextClose = nextReal(close, cursor);
     if (!nextClose) return -1;
     if (nextOpen && nextOpen.index < nextClose.index) {
       depth++;
@@ -114,6 +130,7 @@ export function splitCustomCodeByMount(html: string | null | undefined): SplitCu
   // intent the code never had (found while adding body-end, SCA-1369). Nothing in the live
   // chrome relies on the old behaviour — only `<div class="navwrap">` declares a mount, and it is
   // top-level — so the fix is to make the code match the documented, safer rule.
+  const comments = commentRanges(html);
   const openTag = /<([a-zA-Z][\w-]*)\b[^>]*>/g;
   const declares = new RegExp(`\\b${MOUNT_ATTR}\\s*=\\s*["'](body-start|body-end|before-layers)["']`, 'i');
 
@@ -138,7 +155,7 @@ export function splitCustomCodeByMount(html: string | null | undefined): SplitCu
       continue;
     }
 
-    const end = findElementEnd(html, hit.index, hit[1]);
+    const end = findElementEnd(html, hit.index, hit[1], comments);
     // Unclosed element: leave everything from here on exactly as authored rather than guess.
     if (end === -1) break;
 
